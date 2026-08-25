@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JRC Monitoramento WhatsApp</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-left">
+    <img src="{{ url_for('static', filename='OPERADORA.jpeg') }}" class="logo-jrc" alt="JRC">
+    <div class="topbar-title">
+      <h1>JRC Monitoramento WhatsApp</h1>
+      <div class="top-meta">
+        Última atualização: <span id="last-update">-</span>
+        <span class="top-separator">·</span>
+        Próxima em <span id="countdown">60</span>s
+      </div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button id="refresh-btn" class="top-btn" type="button">↻ Atualizar agora</button>
+    <button id="theme-btn" class="top-btn" type="button">🌙 Escuro</button>
+    <a href="/logout" class="top-link">Sair</a>
+  </div>
+</header>
+
+<main class="container">
+  <section id="summary" class="summary-grid"></section>
+
+  <section class="filters-card">
+    <input id="search" type="search" placeholder="Pesquisar cliente, caixa, número ou perfil...">
+
+    <select id="status-filter">
+      <option value="">Todos os status</option>
+      <option value="connected">Conectado</option>
+      <option value="connecting">Conectando</option>
+      <option value="disconnected">Desconectado</option>
+      <option value="unknown">Desconhecido</option>
+    </select>
+
+    <select id="source-filter">
+      <option value="">Todas as APIs</option>
+    </select>
+
+    <button id="clear-filters" class="clear-btn" type="button">↻ Limpar</button>
+  </section>
+
+  <section id="status-tabs" class="status-tabs"></section>
+
+  <section id="grouped-instances" class="grouped-instances"></section>
+
+  <details class="legend-bottom">
+    <summary>
+      <span>Legenda de status</span>
+      <span class="legend-toggle">Mostrar</span>
+    </summary>
+
+    <div class="legend-content">
+      <div class="legend-grid">
+        <div><strong>🟢 Conectado</strong><span>WhatsApp conectado e operacional.</span></div>
+        <div><strong>🟡 Conectando</strong><span>A instância está estabelecendo ou recuperando a conexão.</span></div>
+        <div><strong>🔴 Desconectado</strong><span>A instância não está conectada ao WhatsApp.</span></div>
+        <div><strong>⚫ API indisponível</strong><span>A Evolution API não respondeu. Isso não significa que todos os WhatsApps estejam desconectados.</span></div>
+        <div><strong>⚪ Desconhecido</strong><span>Estado ainda não reconhecido pelo monitor.</span></div>
+      </div>
+
+      <div class="legend-note">
+        <strong>Código 401:</strong>
+        pode representar uma desconexão anterior.
+        Se o status atual estiver <strong>🟢 Conectado</strong>,
+        a instância está conectada neste momento.
+      </div>
+    </div>
+  </details>
+</main>
+
+<script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>

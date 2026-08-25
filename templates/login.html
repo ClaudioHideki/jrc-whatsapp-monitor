@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="light">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JRC Monitoramento WhatsApp</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <div class="login-brand"><div class="jrc-mark large">JRC</div><div><strong>GRUPO JRC</strong><span>Monitoramento WhatsApp</span></div></div>
+    <h1>Acesso ao monitor</h1>
+    <p class="muted">Entre com seu usuário e senha.</p>
+    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+    <form method="post" autocomplete="off">
+      <label>Usuário</label><input type="text" name="username" required autofocus>
+      <label>Senha</label><input type="password" name="password" required>
+      <button type="submit" class="login-submit">Entrar</button>
+    </form>
+  </main>
+</body>
+</html>
