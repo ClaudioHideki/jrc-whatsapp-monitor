@@ -28,6 +28,8 @@ ERROR_STATUS = {
     "config_changed": 409,
     "connection_busy": 409,
     "connection_fields": 400,
+    "http_origin": 400,
+    "http_read_only": 403,
     "csrf": 403,
     "timeout": 504,
     "unavailable": 503,
@@ -38,7 +40,8 @@ ADMIN_MESSAGES = {
     "storage_failure": "Não foi possível acessar a configuração. Verifique o banco e a chave no servidor.",
     "collector_busy": "Outra instância do monitor está usando o mesmo banco do PABX.",
     "configuration": "Defina uma senha de acesso exclusiva e uma SECRET_KEY forte para o monitor.",
-    "connection_fields": "Confira os campos obrigatórios, a URL HTTPS e o intervalo de 5 a 3600 segundos.",
+    "connection_fields": "Confira os campos obrigatórios, a URL do servidor e o intervalo de 5 a 3600 segundos.",
+    "http_origin": "Use HTTPS ou o endereço HTTP autorizado para este monitor local.",
     "config_changed": "A configuração foi alterada. Recarregue a página antes de continuar.",
     "connection_busy": "Já existe um teste de conexão em andamento.",
     "csrf": "A sessão do formulário expirou. Recarregue a página.",
@@ -132,7 +135,10 @@ def register_pabx(app, login_required, login_user, login_password):
         if not authorized():
             return redirect(url_for("dashboard"))
         profile, revision, monitor = service.current() if service else (PABXProfile(), 0, None)
-        return render_template("pabx.html", cdr_enabled=bool(monitor and profile.cdr_confirmed), revision=revision)
+        return render_template(
+            "pabx.html", cdr_enabled=bool(monitor and monitor.client.config.cdr_customer),
+            http_mode=profile.url.startswith("http://"), revision=revision,
+        )
 
     @routes.route("/monitoramento-pabx/configuracao", methods=["GET", "POST"])
     def settings():
@@ -145,6 +151,7 @@ def register_pabx(app, login_required, login_user, login_password):
 
         profile, revision, _ = service.current()
         csrf = session.setdefault("pabx_csrf", secrets.token_hex(32))
+        allowed_http = service.local_http_origin if request.remote_addr in ("127.0.0.1", "::1") else ""
         message = None
         if request.method == "POST":
             if request.content_length is None or request.content_length > 16384:
@@ -156,10 +163,15 @@ def register_pabx(app, login_required, login_user, login_password):
                     raise PABXError("csrf")
                 if request.form.get("revision") != str(revision):
                     raise PABXError("config_changed")
-                submitted = PABXProfile.from_form(request.form, profile)
+                submitted = PABXProfile.from_form(request.form, profile, allowed_http)
                 if mode == "test":
                     service.test(submitted)
-                    return jsonify(message="Conexão validada. O login e a consulta de status dos ramais responderam.")
+                    test_message = (
+                        "Conexão validada. Ramais e filas responderam."
+                        if submitted.url.startswith("http://")
+                        else "Conexão validada. O login e a consulta de status dos ramais responderam."
+                    )
+                    return jsonify(message=test_message)
                 if mode != "save":
                     raise PABXError("connection_fields")
                 operational_changed = (profile.url, profile.email, profile.account) != (
@@ -188,8 +200,12 @@ def register_pabx(app, login_required, login_user, login_password):
                     return jsonify(error=error.code, message=message), ERROR_STATUS.get(error.code, 502)
                 return render_template(
                     "pabx_settings.html", profile=profile, revision=revision, csrf=csrf, message=message,
+                    allowed_http=allowed_http,
                 ), ERROR_STATUS.get(error.code, 502)
-        return render_template("pabx_settings.html", profile=profile, revision=revision, csrf=csrf, message=message)
+        return render_template(
+            "pabx_settings.html", profile=profile, revision=revision, csrf=csrf, message=message,
+            allowed_http=allowed_http,
+        )
 
     @routes.get("/api/pabx/status")
     @api_auth
@@ -197,6 +213,8 @@ def register_pabx(app, login_required, login_user, login_password):
         profile, revision, monitor = service.current() if service else (PABXProfile(), 0, None)
         if monitor is None:
             state = config_error or ("scope_pending" if profile.enabled else "disabled")
+            if service and profile.enabled and not service.transport_allowed(profile):
+                state = "http_origin"
             return jsonify(state=state, last_success=None, collecting=False,
                            stale=False, data=None, poll_seconds=10, company=profile.company, revision=revision)
         return jsonify(company=profile.company, revision=revision, **monitor.snapshot())

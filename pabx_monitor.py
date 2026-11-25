@@ -90,21 +90,7 @@ def scoped_dashboard(data, account):
     return data
 
 
-def operational_data(client, stop):
-    config = client.config
-    account = config.account
-    deadline = time.monotonic() + max(60, 4 * config.timeout)
-
-    def query(resource, page=None):
-        if stop.is_set():
-            raise PABXError("config_changed")
-        params = {"accountcode": account}
-        if page is not None:
-            params["page"] = page
-        return client.query("GET", resource, params=params, deadline=deadline)
-
-    directory = check_scope(pages(lambda page: query("ramais", page).get("ramais"), limit=50), "accountcode", account)
-    queues = check_scope(pages(lambda page: query("filas", page), limit=50), "accountcode", account)
+def operational_status(query, account):
     live = scoped_dashboard(query("dashboard-extension"), account)
     queue_live = scoped_dashboard(query("dashboard-queue"), account)
     extensions = live.get("extensions")
@@ -128,6 +114,27 @@ def operational_data(client, stop):
     else:
         states = {}
     states.pop("", None)
+    return live_items, states, live_queue_codes, nonnegative_int(summary.get("totalCalls"))
+
+
+def operational_data(client, stop):
+    config = client.config
+    account = config.account
+    deadline = time.monotonic() + max(60, 4 * config.timeout)
+
+    def query(resource, page=None):
+        if stop.is_set():
+            raise PABXError("config_changed")
+        params = {"accountcode": account}
+        if page is not None:
+            params["page"] = page
+        return client.query("GET", resource, params=params, deadline=deadline)
+
+    directory = check_scope(pages(lambda page: query("ramais", page).get("ramais"), limit=50), "accountcode", account)
+    queues = check_scope(pages(lambda page: query("filas", page), limit=50), "accountcode", account)
+    live_items, states, live_queue_codes, active_calls = (
+        ([], {}, None, None) if config.uses_http else operational_status(query, account)
+    )
 
     people = {}
     for item in directory:
@@ -173,7 +180,8 @@ def operational_data(client, stop):
             })
         queue_results.append({
             "code": code, "name": name, "strategy": label(queue.get("strategy")),
-            "monitored": code in live_queue_codes, "members": members,
+            "monitored": None if live_queue_codes is None else code in live_queue_codes,
+            "members": members,
         })
 
     ramais = sorted(
@@ -181,12 +189,15 @@ def operational_data(client, stop):
         key=lambda person: (person["extension"], person["name"]),
     )
     counts = Counter(person["status"] for person in ramais)
-    known_state = not ramais or counts["unknown"] < len(ramais)
-    known_registration = not ramais or any(person["registered"] is not None for person in ramais)
+    known_state = not config.uses_http and (not ramais or counts["unknown"] < len(ramais))
+    known_registration = not config.uses_http and (
+        not ramais or any(person["registered"] is not None for person in ramais)
+    )
     return {
         "indicators": {
             "total": len(ramais),
-            "active_calls": nonnegative_int(summary.get("totalCalls")),
+            "queues": len(queue_results),
+            "active_calls": active_calls,
             "available": counts["available"] if known_state else None,
             "busy": counts["busy"] if known_state else None,
             "ringing": counts["ringing"] if known_state else None,
@@ -314,7 +325,7 @@ class PABXMonitor:
             }
 
     def history(self, start, end):
-        if not self.client.config.cdr_customer:
+        if self.client.config.uses_http or not self.client.config.cdr_customer:
             raise PABXError("cdr_disabled")
         if not self._history_lock.acquire(blocking=False):
             raise PABXError("history_busy")

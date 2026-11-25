@@ -15,7 +15,7 @@ import requests
 from cryptography.fernet import Fernet
 from flask import Flask, session
 
-from pabx import PABXClient, PABXConfig, PABXError, https_origin, pages
+from pabx import PABXClient, PABXConfig, PABXError, pabx_origin, pages
 from pabx_monitor import PABXMonitor
 from pabx_routes import register_pabx
 from pabx_store import PABXProfile, PABXService, PABXStore
@@ -27,6 +27,7 @@ PROFILE = PABXProfile(
     interval=5, enabled=True, scope_confirmed=True, cdr_customer="55", cdr_confirmed=True,
 )
 CONFIG = PABXConfig(PROFILE.url, PROFILE.email, PROFILE.password, PROFILE.account, cdr_customer="55")
+HTTP_ORIGIN = "http://pabx.example.invalid:8080"
 DATES = {"start": "2026-11-01", "end": "2026-11-07"}
 EXTENSIONS = [
     {"name": "demo-101", "accountcode": "demo", "alias": "101", "alias_name": "101 - Ana Teste", "secret": "excluded"},
@@ -107,11 +108,16 @@ class Provider:
 
 
 class ClientTests(unittest.TestCase):
-    def test_https_only(self):
-        self.assertEqual(https_origin("https://PABX.example.invalid:443/"), PROFILE.url)
-        for value in ("http://pabx.example.invalid", "https://x:y@example.invalid", "https://pabx.example.invalid/api"):
+    def test_http_origin_must_be_explicitly_allowed(self):
+        self.assertEqual(pabx_origin("https://PABX.example.invalid:443/"), PROFILE.url)
+        allowed = "http://pabx.example.invalid:8080"
+        self.assertEqual(pabx_origin(allowed + "/", allowed), allowed)
+        for value in (allowed, "http://pabx.example.invalid", "http://other.example.invalid:8080"):
+            with self.assertRaisesRegex(PABXError, "http_origin"):
+                pabx_origin(value, "" if value == allowed else allowed)
+        for value in ("https://x:y@example.invalid", "https://pabx.example.invalid/api"):
             with self.assertRaisesRegex(PABXError, "connection_fields"):
-                https_origin(value)
+                pabx_origin(value)
 
     def test_reuse_renew_and_preserve_tls_settings(self):
         calls = []
@@ -195,6 +201,28 @@ class ClientTests(unittest.TestCase):
 
 
 class MonitorTests(unittest.TestCase):
+    def test_http_collection_reuses_login_and_only_reads_ramais_and_filas(self):
+        provider = Provider()
+        client = PABXClient(replace(CONFIG, url=HTTP_ORIGIN), provider)
+        monitor = PABXMonitor(client)
+        monitor._collect()
+        monitor._collect()
+        indicators = monitor.snapshot()["data"]["indicators"]
+        self.assertEqual(indicators["total"], 2)
+        self.assertEqual(indicators["queues"], 1)
+        self.assertIsNone(indicators["active_calls"])
+        self.assertIsNone(indicators["registered"])
+        with self.assertRaisesRegex(PABXError, "cdr_disabled"):
+            monitor.history(date(2026, 11, 1), date(2026, 11, 7))
+        for method, resource in (("POST", "filas"), ("GET", "dashboard-extension"), ("POST", "relatorio-cdr/search")):
+            with self.assertRaisesRegex(PABXError, "http_read_only"):
+                client.query(method, resource)
+        self.assertEqual(
+            [(method, url.rsplit("/", 1)[1]) for method, url, _ in provider.calls],
+            [("POST", "login")] + [("GET", "ramais"), ("GET", "ramais"), ("GET", "filas")] * 2,
+        )
+        self.assertTrue(all(not args["allow_redirects"] for _, _, args in provider.calls))
+
     def test_operational_status_scope_and_last_valid_collection(self):
         provider = Provider()
         monitor = PABXMonitor(PABXClient(CONFIG, provider))
@@ -268,6 +296,7 @@ class RouteTests(unittest.TestCase):
         self.service = PABXService(
             PABXStore(Path(self.folder.name) / "routes.sqlite3", Fernet.generate_key()),
             client_factory=lambda config: PABXClient(config, self.provider),
+            local_http_origin=HTTP_ORIGIN,
         )
         self.addCleanup(self.stop)
         app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / "templates"))
@@ -345,6 +374,26 @@ class RouteTests(unittest.TestCase):
         self.assertFalse(profile.cdr_confirmed)
         self.assertIsNone(monitor)
         self.assertEqual(self.client.get("/api/pabx/status").json["state"], "scope_pending")
+
+    def test_save_http_only_locally_and_block_cdr(self):
+        self.sign_in()
+        path = "/monitoramento-pabx/configuracao"
+        values = {
+            "action": "save", "csrf": "a" * 64, "revision": "0", "company": PROFILE.company,
+            "url": HTTP_ORIGIN, "email": PROFILE.email, "password": PROFILE.password,
+            "account": PROFILE.account, "interval": "5", "enabled": "1", "scope_confirmed": "1",
+            "cdr_confirmed": "1", "cdr_customer": "55",
+        }
+        self.assertEqual(
+            self.client.post(path, data=values, environ_overrides={"REMOTE_ADDR": "192.0.2.1"}).status_code, 400,
+        )
+        self.assertEqual(self.client.post(path, data={**values, "action": "test"}).status_code, 200)
+        self.assertEqual(self.client.post(path, data=values).status_code, 303)
+        profile, _, _ = self.service.current()
+        self.assertFalse(profile.cdr_confirmed)
+        self.assertIn(b"Coleta por HTTP", self.client.get("/monitoramento-pabx").data)
+        self.assertEqual(self.client.post("/api/pabx/cdr", json=DATES).json["error"], "cdr_disabled")
+        self.assertIsNone(PABXService(self.service.store).current()[2])
 
 
 class WhatsAppTests(unittest.TestCase):

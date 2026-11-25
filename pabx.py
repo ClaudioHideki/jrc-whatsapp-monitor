@@ -28,8 +28,12 @@ class PABXConfig:
     verify: bool | str = True
     cdr_customer: str = field(default="", repr=False)
 
+    @property
+    def uses_http(self):
+        return self.url.startswith("http://")
 
-def https_origin(value):
+
+def pabx_origin(value, allowed_http=""):
     if not value or any(char.isspace() or ord(char) < 32 for char in value):
         raise PABXError("connection_fields")
     try:
@@ -38,14 +42,20 @@ def https_origin(value):
     except ValueError:
         raise PABXError("connection_fields") from None
     if (
-        address.scheme != "https" or not hostname
+        address.scheme not in ("http", "https") or not hostname or port == 0
         or address.username is not None or address.password is not None
         or address.query or address.fragment or address.path not in ("", "/")
         or "\\" in value
     ):
         raise PABXError("connection_fields")
     host = f"[{hostname}]" if ":" in hostname else hostname
-    return f"https://{host}:{port}" if port and port != 443 else f"https://{host}"
+    default_port = 443 if address.scheme == "https" else 80
+    origin = f"{address.scheme}://{host}"
+    if port is not None and port != default_port:
+        origin += f":{port}"
+    if address.scheme == "http" and origin != allowed_http:
+        raise PABXError("http_origin")
+    return origin
 
 
 def _timestamp(value):
@@ -93,9 +103,9 @@ def _token_expiry(data, token, now):
 class PABXClient:
     LOGIN_COOLDOWN = 30
 
-    def __init__(self, config, transport=requests.request):
+    def __init__(self, config, transport=None):
         self.config = config
-        self._transport = transport
+        self._transport = transport or (self._direct_request if config.uses_http else requests.request)
         self._requests = threading.BoundedSemaphore(2)
         self._auth_lock = threading.Lock()
         self._token = None
@@ -103,6 +113,12 @@ class PABXClient:
         self._renew_at = 0
         self._retry_at = 0
         self._login_error = None
+
+    @staticmethod
+    def _direct_request(method, url, **kwargs):
+        with requests.Session() as client:
+            client.trust_env = False
+            return client.request(method, url, **kwargs)
 
     def _request(self, method, path, *, token=None, params=None, payload=None, deadline=None):
         timeout = self.config.timeout
@@ -184,6 +200,8 @@ class PABXClient:
             return self._token
 
     def query(self, method, resource, *, params=None, payload=None, deadline=None):
+        if self.config.uses_http and (method != "GET" or resource not in ("ramais", "filas")):
+            raise PABXError("http_read_only")
         path = "/api/v1/admin/" + resource
         token = self._access_token(deadline=deadline)
         response = self._request(method, path, token=token[0], params=params, payload=payload, deadline=deadline)

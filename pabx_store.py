@@ -8,8 +8,8 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from pabx import PABXClient, PABXConfig, PABXError, https_origin, object_rows
-from pabx_monitor import PABXMonitor, check_scope, scoped_dashboard
+from pabx import PABXClient, PABXConfig, PABXError, object_rows, pabx_origin
+from pabx_monitor import PABXMonitor, check_scope, operational_data, scoped_dashboard
 
 
 DEFAULT_PROFILE = 1
@@ -29,11 +29,11 @@ class PABXProfile:
     cdr_confirmed: bool = False
 
     @classmethod
-    def from_form(cls, form, saved):
+    def from_form(cls, form, saved, allowed_http=""):
         submitted_url = form.get("url", "").strip()
         if len(submitted_url) > 500:
             raise PABXError("connection_fields")
-        url = https_origin(submitted_url)
+        url = pabx_origin(submitted_url, allowed_http)
         company = form.get("company", "").strip()
         email = form.get("email", "").strip() or (saved.email if url == saved.url else "")
         password = form.get("password", "")
@@ -41,7 +41,7 @@ class PABXProfile:
             password = saved.password
         account = form.get("account", "").strip()
         cdr_customer = form.get("cdr_customer", "").strip()
-        cdr_confirmed = form.get("cdr_confirmed") == "1"
+        cdr_confirmed = url.startswith("https://") and form.get("cdr_confirmed") == "1"
         if (
             not all((company, email, password, account))
             or len(company) > 150 or len(email) > 254 or len(password) > 1024
@@ -113,10 +113,11 @@ class PABXStore:
 
 
 class PABXService:
-    def __init__(self, store, *, timeout=10, verify=True, client_factory=PABXClient):
+    def __init__(self, store, *, timeout=10, verify=True, client_factory=PABXClient, local_http_origin=""):
         self.store = store
         self.timeout = timeout
         self.verify = verify
+        self.local_http_origin = local_http_origin
         self._client_factory = client_factory
         self._lock = threading.Lock()
         self._test_lock = threading.Lock()
@@ -133,7 +134,12 @@ class PABXService:
         try:
             timeout = int(os.getenv("PABX_TIMEOUT_SECONDS", "10"))
             encoded = secret.encode("ascii")
-        except (ValueError, UnicodeError):
+            local_http = os.getenv("PABX_LOCAL_HTTP_ORIGIN", "").strip().rstrip("/")
+            if local_http:
+                if not local_http.startswith("http://"):
+                    raise ValueError
+                local_http = pabx_origin(local_http, local_http)
+        except (ValueError, UnicodeError, PABXError):
             raise PABXError("storage_setup") from None
         if not 1 <= timeout <= 30:
             raise PABXError("storage_setup")
@@ -150,7 +156,9 @@ class PABXService:
             ownership.close()
             raise PABXError("collector_busy") from None
         try:
-            service = cls(store, timeout=timeout, verify=os.getenv("PABX_CA_BUNDLE") or True)
+            service = cls(
+                store, timeout=timeout, verify=os.getenv("PABX_CA_BUNDLE") or True, local_http_origin=local_http,
+            )
         except BaseException:
             ownership.close()
             raise
@@ -161,14 +169,17 @@ class PABXService:
         return PABXConfig(
             profile.url, profile.email, profile.password, profile.account,
             profile.interval, self.timeout, self.verify,
-            profile.cdr_customer if profile.cdr_confirmed else "",
+            profile.cdr_customer if profile.cdr_confirmed and profile.url.startswith("https://") else "",
         )
+
+    def transport_allowed(self, profile):
+        return not profile.url.startswith("http://") or profile.url == self.local_http_origin
 
     def _replace_monitor(self):
         if self._monitor is not None:
             self._previous = self._monitor.stop()
             self._monitor = None
-        if self._profile.enabled and self._profile.scope_confirmed:
+        if self._profile.enabled and self._profile.scope_confirmed and self.transport_allowed(self._profile):
             self._monitor = PABXMonitor(self._client_factory(self._client_config(self._profile)))
             self._monitor.start(previous=self._previous)
 
@@ -192,12 +203,17 @@ class PABXService:
                 self._profile = profile
 
     def test(self, profile):
+        if not self.transport_allowed(profile):
+            raise PABXError("http_origin")
         if not self._test_lock.acquire(blocking=False):
             raise PABXError("connection_busy")
         try:
             config = self._client_config(profile)
             _, _, monitor = self.current()
             client = monitor.client if monitor and monitor.client.config == config else self._client_factory(config)
+            if config.uses_http:
+                operational_data(client, threading.Event())
+                return
             data = scoped_dashboard(
                 client.query("GET", "dashboard-extension", params={"accountcode": config.account}),
                 config.account,

@@ -14,6 +14,7 @@
     starting: "Aguardando a primeira coleta.",
     disabled: "Monitoramento desativado. Edite a configuração para ativar.",
     scope_pending: "Aguardando a confirmação do escopo operacional.",
+    http_origin: "O endereço HTTP do perfil precisa ser autorizado nesta execução local.",
     configuration: "A configuração de acesso do servidor precisa ser concluída.",
     storage_setup: "A chave de criptografia e o armazenamento precisam ser configurados no servidor.",
     storage_failure: "Falha ao acessar a configuração do PABX.",
@@ -110,7 +111,8 @@
       const summary = element("summary", queue.name);
       const context = element("span", [
         `${formatCount.format(queue.members.length)} membros`,
-        queue.strategy, queue.monitored ? "Presente no painel operacional" : "Sem dados no painel operacional",
+        queue.strategy, queue.monitored === null ? "" :
+          queue.monitored ? "Presente no painel operacional" : "Sem dados no painel operacional",
       ].filter(Boolean).join(" · "));
       context.className = "muted";
       summary.append(" ", context);

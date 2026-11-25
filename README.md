@@ -135,6 +135,19 @@ a semântica das durações, o fuso do relatório, a validade e renovação do
 token e o acesso a áudio no ambiente do fornecedor. A consulta aceita períodos
 de até 31 dias e até 100 páginas. Se o limite for excedido, reduza o período.
 
+### Coleta local de ramais e filas via HTTP
+
+Na execução restrita ao computador local, `PABX_LOCAL_HTTP_ORIGIN` pode
+autorizar uma única origem HTTP exata, formada pelo esquema, endereço e porta
+do PABX. Use esse ajuste somente quando o tráfego sem criptografia até o PABX
+for aceito para o ambiente. O formulário aceita essa origem em uma sessão
+local. Guarde a origem na configuração persistente do servidor local para
+retomar a coleta após reiniciar.
+
+Nesse modo, a única operação POST é o login para obter ou renovar o token.
+A coleta consulta por GET as listas de ramais e filas. O histórico CDR e os
+painéis de estado em tempo real usam o modo HTTPS.
+
 ### Testes locais
 
 ```powershell
