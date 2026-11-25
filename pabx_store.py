@@ -137,8 +137,25 @@ class PABXService:
             raise PABXError("storage_setup") from None
         if not 1 <= timeout <= 30:
             raise PABXError("storage_setup")
-        store = PABXStore(os.getenv("PABX_CONFIG_DB") or ".pabx/config.sqlite3", encoded)
-        return cls(store, timeout=timeout, verify=os.getenv("PABX_CA_BUNDLE") or True)
+        path = Path(os.getenv("PABX_CONFIG_DB") or ".pabx/config.sqlite3").resolve()
+        store = PABXStore(path, encoded)
+        # Keep this transaction open for the process lifetime. A separate file leaves profile writes free.
+        try:
+            ownership = sqlite3.connect(path.with_name(f"{path.name}.collector.sqlite3"), timeout=35)
+        except sqlite3.Error:
+            raise PABXError("storage_setup") from None
+        try:
+            ownership.execute("BEGIN EXCLUSIVE")
+        except sqlite3.Error:
+            ownership.close()
+            raise PABXError("collector_busy") from None
+        try:
+            service = cls(store, timeout=timeout, verify=os.getenv("PABX_CA_BUNDLE") or True)
+        except BaseException:
+            ownership.close()
+            raise
+        service._ownership = ownership
+        return service
 
     def _client_config(self, profile):
         return PABXConfig(

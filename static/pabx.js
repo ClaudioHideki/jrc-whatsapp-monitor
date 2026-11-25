@@ -17,6 +17,7 @@
     configuration: "A configuração de acesso do servidor precisa ser concluída.",
     storage_setup: "A chave de criptografia e o armazenamento precisam ser configurados no servidor.",
     storage_failure: "Falha ao acessar a configuração do PABX.",
+    collector_busy: "Outra instância do monitor está usando o mesmo banco do PABX.",
     credentials: "Credenciais do PABX recusadas.",
     forbidden: "A conta do PABX não tem permissão para essa consulta.",
     scope_mismatch: "O PABX retornou dados fora do escopo confirmado ou sem identificação.",

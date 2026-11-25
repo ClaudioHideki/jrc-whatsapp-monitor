@@ -18,6 +18,7 @@ ERROR_STATUS = {
     "configuration": 503,
     "storage_setup": 503,
     "storage_failure": 503,
+    "collector_busy": 503,
     "cdr_disabled": 403,
     "forbidden": 403,
     "scope_mismatch": 403,
@@ -35,6 +36,7 @@ ERROR_STATUS = {
 ADMIN_MESSAGES = {
     "storage_setup": "Configure a chave de criptografia do PABX e o caminho do banco no servidor.",
     "storage_failure": "Não foi possível acessar a configuração. Verifique o banco e a chave no servidor.",
+    "collector_busy": "Outra instância do monitor está usando o mesmo banco do PABX.",
     "configuration": "Defina uma senha de acesso exclusiva e uma SECRET_KEY forte para o monitor.",
     "connection_fields": "Confira os campos obrigatórios, a URL HTTPS e o intervalo de 5 a 3600 segundos.",
     "config_changed": "A configuração foi alterada. Recarregue a página antes de continuar.",

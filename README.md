@@ -97,9 +97,10 @@ associar usuários aos IDs e iniciar um coletor por perfil autorizado.
    Guarde a saída em `PABX_CONFIG_KEY` no servidor. Preserve a chave entre
    reinícios e armazene-a separadamente do backup do SQLite. Para Docker, monte
    um volume persistente e aponte `PABX_CONFIG_DB` para um arquivo nele.
-3. Rode `app.py` ou o contêiner do projeto. A configuração do contêiner usa um
-   processo Gunicorn com quatro threads, compartilhando uma coleta por
-   instalação. Em produção, sirva o monitor atrás de HTTPS e defina
+3. Rode `app.py` ou o contêiner do projeto. A configuração `gunicorn.conf.py`
+   exige um worker com quatro threads e sem preload. Cada banco permite um
+   único processo coletor, inclusive durante a troca de workers. Em produção,
+   sirva o monitor atrás de HTTPS e defina
    `SESSION_COOKIE_SECURE=1`. A coleta reinicia com o servidor em execução
    quando a configuração persistida está ativa.
 4. Em **Monitoramento PABX → Configuração**, informe a empresa, a origem HTTPS

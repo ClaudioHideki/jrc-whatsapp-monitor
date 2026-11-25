@@ -1,5 +1,6 @@
 **
 !app.py
+!gunicorn.conf.py
 !pabx.py
 !pabx_monitor.py
 !pabx_routes.py
