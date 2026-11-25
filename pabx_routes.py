@@ -1,14 +1,19 @@
 import csv
 import io
+import os
 import re
 import secrets
+import subprocess
+import threading
 from contextlib import ExitStack
 from dataclasses import replace
 from datetime import date
 from functools import wraps
+from urllib.parse import unquote, urlsplit
 
 import requests
 from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, session, url_for
+from imageio_ffmpeg import get_ffmpeg_exe
 
 from pabx import PABXError
 from pabx_store import PABXProfile, PABXService
@@ -39,7 +44,8 @@ ERROR_STATUS = {
     "unavailable": 503,
 }
 
-RECORDING_TYPES = frozenset(("audio/wav", "audio/x-wav", "audio/wave", "audio/mpeg", "audio/ogg", "audio/mp4"))
+WAV_TYPES = frozenset(("audio/wav", "audio/x-wav", "audio/wave"))
+RECORDING_TYPES = WAV_TYPES | {"audio/mpeg", "audio/ogg", "audio/mp4"}
 
 ADMIN_MESSAGES = {
     "storage_setup": "Configure a chave de criptografia do PABX e o caminho do banco no servidor.",
@@ -102,13 +108,50 @@ def cdr_csv(rows):
     )
 
 
+def transcode_wav(upstream, resources):
+    try:
+        encoder = resources.enter_context(subprocess.Popen(
+            [get_ffmpeg_exe(), "-nostdin", "-loglevel", "error", "-protocol_whitelist", "pipe",
+             "-f", "wav", "-i", "pipe:0",
+             "-map", "0:a:0", "-map_metadata", "-1", "-c:a", "libmp3lame", "-b:a", "32k",
+             "-write_xing", "0", "-f", "mp3", "pipe:1"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            env={name: os.environ[name] for name in ("SystemRoot", "WINDIR") if name in os.environ},
+        ))
+    except (OSError, RuntimeError):
+        raise PABXError("recording_missing") from None
+
+    def stop_encoder():
+        if encoder.poll() is None:
+            encoder.kill()
+
+    resources.callback(stop_encoder)
+
+    def feed():
+        try:
+            with encoder.stdin as input_stream:
+                for chunk in upstream.iter_content(chunk_size=16 * 1024):
+                    input_stream.write(chunk)
+        except (OSError, requests.RequestException):
+            return
+
+    def output():
+        threading.Thread(target=feed, name="pabx-recording", daemon=True).start()
+        yield from iter(lambda: encoder.stdout.read1(16 * 1024), b"")
+
+    return output()
+
+
 def stream_recording(url, config):
     headers = {"Accept-Encoding": "identity"}
+    wav_path = unquote(urlsplit(url).path).lower().endswith(".wav")
     requested_range = request.headers.get("Range")
     if requested_range is not None:
         if not re.fullmatch(r"bytes=(?:[0-9]{1,16}-[0-9]{0,16}|-[0-9]{1,16})", requested_range):
             raise PABXError("recording_range")
-        headers["Range"] = requested_range
+        if not wav_path:
+            headers["Range"] = requested_range
 
     with ExitStack() as stack:
         client = stack.enter_context(requests.Session())
@@ -133,6 +176,15 @@ def stream_recording(url, config):
             "X-Content-Type-Options": "nosniff",
             "Cross-Origin-Resource-Policy": "same-origin",
         }
+        if wav_path and media in WAV_TYPES:
+            if upstream.status_code != 200:
+                raise PABXError("recording_missing")
+            # A byte range of the WAV cannot serve as a byte range of the converted MP3.
+            body = transcode_wav(upstream, stack) if request.method == "GET" else iter(())
+            response = Response(body, content_type="audio/mpeg", headers=response_headers)
+            response.call_on_close(stack.pop_all().close)
+            return response
+
         if upstream.headers.get("Accept-Ranges") == "bytes":
             response_headers["Accept-Ranges"] = "bytes"
         if upstream.status_code == 206:

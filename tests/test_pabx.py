@@ -439,11 +439,13 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/pabx/cdr", json=DATES).json["error"], "cdr_disabled")
         self.assertIsNone(PABXService(self.service.store).current()[2])
 
-        local_audio = HTTP_ORIGIN + "/recordings/example.wav"
+        local_audio = HTTP_ORIGIN + "/recordings/example.mp3"
+        wav_audio = HTTP_ORIGIN + "/recordings/gsm-example.wav"
         self.provider.cdr = [
             {**CDR[0], "arquivo_audio": local_audio},
             {**CDR[1], "arquivo_audio": "https://other.example.invalid/private.m4a"},
             {**CDR[2], "arquivo_audio": HTTP_ORIGIN + "/recordings/%2e%2e/private.wav"},
+            {**CDR[0], "arquivo_audio": wav_audio},
         ]
         saved = self.client.post(path, data={**values, "revision": "1", "email": "", "password": "", "cdr_confirmed": "1"})
         self.assertEqual(saved.status_code, 303)
@@ -465,7 +467,7 @@ class RouteTests(unittest.TestCase):
             upstream = requests.Response()
             upstream.status_code = 206
             upstream.headers.update({
-                "Content-Type": "audio/x-wav", "Accept-Ranges": "bytes",
+                "Content-Type": "audio/mpeg", "Accept-Ranges": "bytes",
                 "Content-Length": "2", "Content-Range": "bytes 0-1/10",
             })
             upstream._content = b"RI"
@@ -481,6 +483,28 @@ class RouteTests(unittest.TestCase):
             self.assertNotIn("Authorization", session.request.call_args.kwargs["headers"])
             self.assertFalse(session.request.call_args.kwargs["allow_redirects"])
             audio.close()
+
+            upstream = requests.Response()
+            upstream.status_code = 200
+            upstream.headers.update({"Content-Type": "audio/x-wav", "Content-Length": "1040"})
+            upstream._content_consumed = True
+            session.request.return_value = upstream
+            wav_id = rows[3]["recording_id"]
+            self.assertNotIn(wav_audio, report.get_data(as_text=True))
+            with patch("pabx_routes.transcode_wav", return_value=iter([b"ID3"])) as convert:
+                head = self.client.head(f"/api/pabx/recordings/{wav_id}")
+                self.assertEqual(head.mimetype, "audio/mpeg")
+                self.assertEqual(head.get_data(), b"")
+                convert.assert_not_called()
+                head.close()
+                audio = self.client.get(f"/api/pabx/recordings/{wav_id}", headers={"Range": "bytes=0-"}, buffered=True)
+                self.assertEqual(audio.status_code, 200)
+                self.assertEqual(audio.mimetype, "audio/mpeg")
+                self.assertEqual(audio.get_data(), b"ID3")
+                self.assertNotIn("Content-Range", audio.headers)
+                self.assertNotIn("Range", session.request.call_args.kwargs["headers"])
+                convert.assert_called_once()
+                audio.close()
 
 
 class WhatsAppTests(unittest.TestCase):
