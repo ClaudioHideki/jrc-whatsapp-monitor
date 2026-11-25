@@ -72,3 +72,73 @@ As chaves ficam apenas no backend e não são enviadas ao navegador.
 - Legenda movida para o final e recolhível.
 - Atualização automática de 60 segundos preservada.
 - Consultas Evolution continuam somente GET.
+
+## Monitoramento PABX
+
+A aba **Monitoramento PABX** usa o mesmo login do painel WhatsApp. A conta
+configurada em `LOGIN_USER` é a administradora desta instalação. A tela
+**Configuração** abre para essa conta e permite testar, salvar, ativar e desativar
+a integração. A versão atual monitora um PABX por instalação. O banco associa a
+configuração criptografada a um ID, e cada coletor mantém seu próprio token,
+estado operacional e cache CDR. Uma futura instalação multiempresa precisará
+associar usuários aos IDs e iniciar um coletor por perfil autorizado.
+
+### Configurar e executar
+
+1. Instale as dependências e copie `.env.example` conforme a seção para Windows.
+   Defina uma senha do monitor exclusiva e uma `SECRET_KEY` aleatória com pelo
+   menos 32 caracteres. Mantenha esses valores no ambiente ou no `.env` local.
+2. Gere uma chave separada para criptografar a configuração.
+
+   ```powershell
+   .\.venv\Scripts\python.exe -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+
+   Guarde a saída em `PABX_CONFIG_KEY` no servidor. Preserve a chave entre
+   reinícios e armazene-a separadamente do backup do SQLite. Para Docker, monte
+   um volume persistente e aponte `PABX_CONFIG_DB` para um arquivo nele.
+3. Rode `app.py` ou o contêiner do projeto. A configuração do contêiner usa um
+   processo Gunicorn com quatro threads, compartilhando uma coleta por
+   instalação. Em produção, sirva o monitor atrás de HTTPS e defina
+   `SESSION_COOKIE_SECURE=1`. A coleta reinicia com o servidor em execução
+   quando a configuração persistida está ativa.
+4. Em **Monitoramento PABX → Configuração**, informe a empresa, a origem HTTPS
+   do PABX, login de leitura, senha, intervalo e `accountcode`. Para uma CA
+   privada, monte o arquivo PEM e informe o caminho em `PABX_CA_BUNDLE`. O
+   navegador envia as credenciais ao servidor do monitor no cadastro. O
+   SQLite guarda a configuração com criptografia autenticada Fernet, e o
+   servidor não preenche novamente login ou senha no formulário.
+5. Use **Testar conexão** para validar o login e uma consulta ao painel de
+   ramais. Confirme com o fornecedor o escopo das quatro rotas operacionais,
+   marque a confirmação e **Ativar monitoramento**, depois salve. O token
+   fica em memória, é reaproveitado entre rotas e renovado por novo login
+   conforme a validade informada ou após um 401. Um 403 sinaliza falta de
+   permissão. A coleta usa o timeout configurável `PABX_TIMEOUT_SECONDS`.
+6. Para habilitar o histórico, confirme separadamente a segregação de
+   `relatorio-cdr/search` pelo fornecedor e informe o `cliente_id` autorizado.
+   O CDR usa o contrato observado no notebook, com filtros de período no JSON
+   e a página na URL da consulta. A aplicação valida o `cliente_id` de cada
+   linha e rejeita a resposta se houver registro de outro cliente ou sem ID.
+
+A tela de operação informa o horário da última coleta e mantém a última
+leitura durante uma falha de comunicação. Se houver rejeição de credenciais,
+permissão ou escopo, os dados operacionais são retirados da tela e o horário
+da última coleta permanece visível. O estado de um ramal e a pausa do agente
+em uma fila são exibidos em colunas distintas.
+
+O CDR apresenta uma linha por registro, inclusive quando o `uniqueid` se
+repete. Gráficos, filtros e exportação CSV usam essa unidade de contagem.
+Origem e destino são mascarados, e gravações aparecem como indicação de
+referência. A homologação precisa confirmar a consolidação de chamadas,
+a semântica das durações, o fuso do relatório, a validade e renovação do
+token e o acesso a áudio no ambiente do fornecedor. A consulta aceita períodos
+de até 31 dias e até 100 páginas. Se o limite for excedido, reduza o período.
+
+### Testes locais
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+Os testes usam respostas sanitizadas e exercitam as rotas Flask, a coleta
+automática, os controles de acesso, o CDR e o monitor de WhatsApp.

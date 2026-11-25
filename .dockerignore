@@ -1,0 +1,11 @@
+**
+!app.py
+!pabx.py
+!pabx_monitor.py
+!pabx_routes.py
+!pabx_store.py
+!requirements.txt
+!static
+!static/**
+!templates
+!templates/**

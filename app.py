@@ -7,6 +7,8 @@ import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
+from pabx_routes import register_pabx
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -14,6 +16,7 @@ app.secret_key = os.getenv("SECRET_KEY", "change-me")
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE") == "1",
 )
 
 LOGIN_USER = os.getenv("LOGIN_USER", "admin")
@@ -155,6 +158,8 @@ def get_monitor_data():
 
 def login_required():
     return session.get("authenticated") is True
+
+register_pabx(app, login_required, LOGIN_USER, LOGIN_PASSWORD)
 
 @app.route("/", methods=["GET"])
 def index():

@@ -1,0 +1,4 @@
+<nav class="monitor-nav" aria-label="Áreas de monitoramento">
+  <a href="{{ url_for('dashboard') }}" {% if request.endpoint == 'dashboard' %}aria-current="page"{% endif %}>Monitoramento WhatsApp</a>
+  <a href="{{ url_for('pabx.page') }}" {% if request.endpoint == 'pabx.page' %}aria-current="page"{% elif request.endpoint == 'pabx.settings' %}aria-current="location"{% endif %}>Monitoramento PABX</a>
+</nav>

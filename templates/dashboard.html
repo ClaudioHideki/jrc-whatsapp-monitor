@@ -28,6 +28,7 @@
 </header>
 
 <main class="container">
+  {% include "_monitor_nav.html" %}
   <section id="summary" class="summary-grid"></section>
 
   <section class="filters-card">
@@ -77,6 +78,7 @@
   </details>
 </main>
 
+<script src="{{ url_for('static', filename='theme.js') }}"></script>
 <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
 </body>
 </html>

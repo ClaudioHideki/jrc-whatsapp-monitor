@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Configuração do PABX | JRC</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='pabx.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-left">
+    <img src="{{ url_for('static', filename='OPERADORA.jpeg') }}" class="logo-jrc" alt="JRC">
+    <div class="topbar-title"><h1>Configuração do PABX</h1></div>
+  </div>
+  <div class="actions">
+    <button id="theme-btn" class="top-btn" type="button">🌙 Escuro</button>
+    <a href="{{ url_for('logout') }}" class="top-link">Sair</a>
+  </div>
+</header>
+<main class="container pabx">
+  {% include "_monitor_nav.html" %}
+  <section class="pabx-panel pabx-settings" aria-labelledby="pabx-settings-title">
+    <div class="pabx-section-heading">
+      <h2 id="pabx-settings-title">Integração PABX</h2>
+      <a href="{{ url_for('pabx.page') }}">Voltar ao monitoramento</a>
+    </div>
+    {% if setup_error %}
+    <p class="pabx-notice" role="alert">{{ setup_error }}</p>
+    {% else %}
+    {% for notice in get_flashed_messages(category_filter=['pabx']) %}
+    <p class="pabx-notice" role="status">{{ notice }}</p>
+    {% endfor %}
+    {% if message %}<p class="pabx-notice" role="alert">{{ message }}</p>{% endif %}
+    <form id="pabx-settings-form" action="{{ url_for('pabx.settings') }}" method="post">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="revision" value="{{ revision }}">
+      <fieldset class="pabx-form-grid">
+        <legend>Conexão</legend>
+        <label>Empresa ou cliente <input name="company" value="{{ profile.company }}" required maxlength="150"></label>
+        <label>URL do servidor <input name="url" type="url" placeholder="https://pabx.example.invalid" value="{{ profile.url }}" required maxlength="500"></label>
+        <label>Login do PABX <input name="email" autocomplete="off" placeholder="{{ 'Login salvo' if profile.email else 'monitor@example.invalid' }}" {% if not profile.email %}required{% endif %} maxlength="254"></label>
+        <label>Senha do PABX <input name="password" type="password" autocomplete="new-password" placeholder="{{ 'Senha salva' if profile.password else '' }}" {% if not profile.password %}required{% endif %} maxlength="1024"></label>
+        <label>Intervalo de atualização em segundos <input name="interval" type="number" min="5" max="3600" value="{{ profile.interval }}" required></label>
+        <label class="pabx-check"><input name="enabled" type="checkbox" value="1" {% if profile.enabled %}checked{% endif %}> Ativar monitoramento</label>
+      </fieldset>
+      <fieldset class="pabx-form-grid">
+        <legend>Escopo de consulta</legend>
+        <label>Código da conta (accountcode) <input name="account" value="{{ profile.account }}" required maxlength="150"></label>
+        <label>Identificador do cliente no CDR (cliente_id) <input name="cdr_customer" value="{{ profile.cdr_customer }}" maxlength="150"></label>
+        <label class="pabx-check"><input name="scope_confirmed" type="checkbox" value="1" {% if profile.scope_confirmed %}checked{% endif %}> Confirmei a segregação das rotas operacionais</label>
+        <label class="pabx-check"><input name="cdr_confirmed" type="checkbox" value="1" {% if profile.cdr_confirmed %}checked{% endif %}> Confirmei a segregação da rota de histórico CDR</label>
+      </fieldset>
+      <div class="pabx-form-actions">
+        <button id="pabx-test" class="clear-btn" type="button">Testar conexão</button>
+        <button class="pabx-action" name="action" value="save" type="submit">Salvar configuração</button>
+      </div>
+      <p id="pabx-test-result" class="muted" role="status"></p>
+    </form>
+    {% endif %}
+  </section>
+</main>
+<script src="{{ url_for('static', filename='theme.js') }}"></script>
+<script src="{{ url_for('static', filename='pabx_settings.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JRC Monitoramento PABX</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='pabx.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-left">
+    <img src="{{ url_for('static', filename='OPERADORA.jpeg') }}" class="logo-jrc" alt="JRC">
+    <div class="topbar-title">
+      <h1>JRC Monitoramento PABX</h1>
+      <div class="top-meta">Ramais, filas e registros de chamadas</div>
+    </div>
+  </div>
+  <div class="actions">
+    <button id="theme-btn" class="top-btn" type="button">🌙 Escuro</button>
+    <a href="{{ url_for('pabx.settings') }}" class="top-link">Configuração</a>
+    <a href="{{ url_for('logout') }}" class="top-link">Sair</a>
+  </div>
+</header>
+<main class="container pabx" data-status-url="{{ url_for('pabx.status') }}" data-revision="{{ revision }}"
+      data-cdr-url="{{ url_for('pabx.history') }}" data-export-url="{{ url_for('pabx.export_history') }}">
+  {% include "_monitor_nav.html" %}
+  <section class="pabx-connection" aria-labelledby="connection-heading">
+    <div>
+      <h2 id="connection-heading">Conexão com o PABX</h2>
+      <p class="muted" id="pabx-company" hidden></p>
+      <p id="pabx-message" role="status">Verificando conexão…</p>
+    </div>
+    <div class="pabx-collection">
+      <span id="pabx-progress" hidden>Coleta em andamento</span>
+      <span>Última coleta válida <strong id="pabx-time">—</strong></span>
+    </div>
+  </section>
+  <section aria-labelledby="overview-heading">
+    <div class="pabx-section-heading">
+      <h2 id="overview-heading">Visão operacional</h2>
+      <a href="#pabx-history">Ir para o histórico CDR ↓</a>
+    </div>
+    <div class="summary-grid pabx-summary">
+      {% for key, title in [
+        ('total', 'Ramais'), ('active_calls', 'Chamadas ativas'),
+        ('available', 'Disponíveis'), ('busy', 'Ocupados'),
+        ('ringing', 'Tocando'), ('registered', 'Registrados'),
+        ('unregistered', 'Não registrados'), ('unknown', 'Estado indefinido')
+      ] %}
+      <div class="summary-card">
+        <div class="summary-label">{{ title }}</div>
+        <div class="summary-value" data-indicator="{{ key }}">—</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="pabx-panel" aria-labelledby="extensions-heading">
+    <h2 id="extensions-heading">Ramais</h2>
+    <div class="pabx-filters">
+      <label>Buscar por nome ou ramal <input id="pabx-search" type="search" placeholder="Nome ou ramal"></label>
+      <label>Status
+        <select id="pabx-state">
+          <option value="">Todos os estados</option>
+          <option value="available">Disponível</option>
+          <option value="busy">Ocupado</option>
+          <option value="ringing">Tocando</option>
+          <option value="registered">Registrado</option>
+          <option value="unregistered">Não registrado</option>
+          <option value="unknown">Estado indefinido</option>
+        </select>
+      </label>
+      <label>Fila <select id="pabx-queue"><option value="">Todas as filas</option></select></label>
+    </div>
+    <p id="pabx-extension-count" class="muted" role="status"></p>
+    <div class="pabx-table-wrap" tabindex="0" aria-label="Tabela de ramais">
+      <table class="client-table pabx-table">
+        <thead><tr><th scope="col">Ramal</th><th scope="col">Nome cadastrado</th><th scope="col">Estado</th><th scope="col">Registro</th><th scope="col">Filas</th></tr></thead>
+        <tbody id="pabx-extensions"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="pabx-panel" aria-labelledby="queues-heading">
+    <h2 id="queues-heading">Filas</h2>
+    <div id="pabx-queues" class="pabx-queues"></div>
+  </section>
+
+  <section class="pabx-panel" id="pabx-history" aria-labelledby="history-heading">
+    <h2 id="history-heading">Histórico CDR</h2>
+    {% if cdr_enabled %}
+    <form class="pabx-filters" id="pabx-history-form">
+      <label>De <input name="start" type="date" required></label>
+      <label>Até <input name="end" type="date" required></label>
+      <label>Situação <select name="status"><option value="">Todas</option></select></label>
+      <label>Direção <select name="direction"><option value="">Todas</option></select></label>
+      <button class="pabx-action" type="submit">Consultar</button>
+      <button class="clear-btn" id="pabx-export" type="button" disabled>Exportar CSV</button>
+    </form>
+    <p class="muted" id="pabx-history-message" role="status">Selecione um período de até 31 dias e consulte os registros.</p>
+    <div id="pabx-history-results" hidden>
+      <div class="pabx-history-totals">
+        <div><strong data-cdr-status="atendida">—</strong> <span>Registros atendidos</span></div>
+        <div><strong data-cdr-status="não atendida">—</strong> <span>Registros não atendidos</span></div>
+      </div>
+      <div class="pabx-charts">
+        <div><h3>Registros por situação</h3><div id="pabx-status-chart"></div></div>
+        <div><h3>Registros por direção</h3><div id="pabx-direction-chart"></div></div>
+      </div>
+      <div class="pabx-table-wrap" tabindex="0" aria-label="Tabela de registros CDR">
+        <table class="client-table pabx-table pabx-cdr-table">
+          <thead><tr><th scope="col">Data no PABX</th><th scope="col">Identificador CDR</th><th scope="col">Origem</th><th scope="col">Destino</th><th scope="col">Situação</th><th scope="col">Direção</th><th scope="col">Gravação</th></tr></thead>
+          <tbody id="pabx-records"></tbody>
+        </table>
+      </div>
+      <div class="pabx-pagination" aria-label="Paginação do histórico">
+        <button type="button" class="clear-btn" id="pabx-prev">Anterior</button>
+        <span id="pabx-page" aria-live="polite"></span>
+        <button type="button" class="clear-btn" id="pabx-next">Próxima</button>
+      </div>
+    </div>
+    {% else %}
+    <p class="muted">Histórico disponível após a confirmação do escopo CDR na configuração da integração.</p>
+    {% endif %}
+  </section>
+</main>
+<script src="{{ url_for('static', filename='theme.js') }}"></script>
+<script src="{{ url_for('static', filename='pabx.js') }}"></script>
+</body>
+</html>

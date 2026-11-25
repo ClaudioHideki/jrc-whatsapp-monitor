@@ -1,4 +1,10 @@
 .env
+.env.*
+!.env.example
 .venv/
 __pycache__/
 *.pyc
+*.ipynb
+.pabx/
+*.sqlite3
+*.sqlite3-*

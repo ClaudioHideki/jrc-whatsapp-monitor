@@ -116,6 +116,31 @@ body {
   padding: 24px;
 }
 
+.monitor-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-bottom: 18px;
+  padding: 0 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 13px;
+}
+
+.monitor-nav a {
+  padding: 12px 2px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.monitor-nav a[aria-current] {
+  border-color: #1268d7;
+  color: var(--text);
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(140px, 1fr));

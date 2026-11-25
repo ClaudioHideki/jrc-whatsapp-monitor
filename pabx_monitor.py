@@ -1,0 +1,333 @@
+import re
+import threading
+import time
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
+
+from pabx import PABXError, nonnegative_int, object_rows, pages
+
+
+EXTENSION_STATES = {
+    "available": ("available", "free", "not in use", "not inuse", "idle", "disponível"),
+    "busy": ("busy", "inuse", "in use", "incall", "in call", "ocupado", "em ligação", "ringinuse", "on hold"),
+    "ringing": ("ringing", "ring", "tocando"),
+    "unregistered": ("unregistered", "unavailable", "offline", "unreachable", "não registrado"),
+    "registered": ("registered", "online"),
+}
+STATE_BY_VALUE = {
+    value: state for state, values in EXTENSION_STATES.items() for value in values
+}
+
+
+def label(value):
+    if type(value) not in (str, int):
+        return ""
+    return " ".join(str(value).split())[:150]
+
+
+def key(value):
+    return re.sub(r"^(?:PJSIP|SIP)/", "", label(value), flags=re.I)
+
+
+def flag(value):
+    if value in (True, 1, "1"):
+        return True
+    if value in (False, 0, "0"):
+        return False
+    return None
+
+
+def extension_info(item):
+    alias = label(item.get("alias_name"))
+    match = re.match(r"^(\d+)\s*[-–]\s*(.+)$", alias)
+    return {
+        "extension": label(item.get("alias")) or (match[1] if match else key(item.get("name"))),
+        "name": match[2] if match else alias,
+    }
+
+
+def extension_state(item, value):
+    if isinstance(value, dict):
+        value = value.get("status") or value.get("state") or value.get("registration_status")
+    state = next(
+        (
+            STATE_BY_VALUE[token]
+            for candidate in (value, item.get("status"), item.get("state"), item.get("register"))
+            if (token := label(candidate).lower().replace("_", " ")) in STATE_BY_VALUE
+        ),
+        None,
+    )
+    registered = flag(item.get("registered"))
+    if registered is None:
+        registered = flag(item.get("register"))
+    busy = flag(item.get("busy"))
+    if state is None:
+        if busy is True:
+            state = "busy"
+        elif registered is False:
+            state = "unregistered"
+        elif registered is True:
+            state = "available" if busy is False else "registered"
+    if state == "unregistered":
+        registered = False
+    elif registered is None and state in ("available", "registered"):
+        registered = True
+    return state or "unknown", registered
+
+
+def check_scope(rows, field, expected):
+    if any(type(row.get(field)) not in (str, int) or str(row[field]).strip() != expected for row in rows):
+        raise PABXError("scope_mismatch")
+    return rows
+
+
+def scoped_dashboard(data, account):
+    if "status" in data and data["status"] in (False, 0, "0", "error", "failed"):
+        raise PABXError("upstream_response")
+    filters = data.get("filters")
+    if isinstance(filters, dict) and filters.get("accountcode") is not None:
+        check_scope([filters], "accountcode", account)
+    return data
+
+
+def operational_data(client, stop):
+    config = client.config
+    account = config.account
+    deadline = time.monotonic() + max(60, 4 * config.timeout)
+
+    def query(resource, page=None):
+        if stop.is_set():
+            raise PABXError("config_changed")
+        params = {"accountcode": account}
+        if page is not None:
+            params["page"] = page
+        return client.query("GET", resource, params=params, deadline=deadline)
+
+    directory = check_scope(pages(lambda page: query("ramais", page).get("ramais"), limit=50), "accountcode", account)
+    queues = check_scope(pages(lambda page: query("filas", page), limit=50), "accountcode", account)
+    live = scoped_dashboard(query("dashboard-extension"), account)
+    queue_live = scoped_dashboard(query("dashboard-queue"), account)
+    extensions = live.get("extensions")
+    summary = live.get("summary")
+    if not isinstance(extensions, dict) or not isinstance(summary, dict):
+        raise PABXError("upstream_response")
+    live_items = check_scope(object_rows(extensions.get("items")), "accountcode", account)
+    if nonnegative_int(extensions.get("total")) not in (None, len(live_items)):
+        raise PABXError("upstream_response")
+    live_queues = check_scope(object_rows(queue_live.get("queues")), "accountcode", account)
+    live_queue_codes = {label(item.get("name")) for item in live_queues}
+
+    status_map = live.get("statusMap")
+    if isinstance(status_map, dict):
+        states = {key(name): state for name, state in status_map.items()}
+    elif isinstance(status_map, list):
+        states = {
+            key(item.get("extension") or item.get("name") or item.get("ramal")): item
+            for item in object_rows(status_map)
+        }
+    else:
+        states = {}
+    states.pop("", None)
+
+    people = {}
+    for item in directory:
+        identifier = key(item.get("name"))
+        if not identifier:
+            raise PABXError("upstream_response")
+        people[identifier] = {**extension_info(item), "status": "unknown", "registered": None}
+    for item in live_items:
+        identifier = key(item.get("name"))
+        if not identifier:
+            raise PABXError("upstream_response")
+        person = people.setdefault(identifier, extension_info(item))
+        value = states.get(identifier, states.get(person["extension"]))
+        person["status"], person["registered"] = extension_state(item, value)
+
+    memberships = defaultdict(list)
+    queue_results = []
+    for queue in queues:
+        code = label(queue.get("name"))
+        if not code:
+            raise PABXError("upstream_response")
+        name = label(queue.get("descricao")) or code
+        members = []
+        for member in object_rows(queue["membros"] if queue.get("membros") is not None else []):
+            ramal = member.get("ramal")
+            if ramal is not None and not isinstance(ramal, dict):
+                raise PABXError("upstream_response")
+            ramal = ramal or {}
+            if ramal.get("accountcode") is not None:
+                check_scope([ramal], "accountcode", account)
+            identifier = key(ramal.get("name") or member.get("interface"))
+            person = people.get(identifier)
+            if not person:
+                members.append({"extension": "", "name": "", "status": "unknown", "paused": flag(member.get("paused"))})
+                continue
+            paused = flag(member.get("paused"))
+            memberships[identifier].append({"code": code, "name": name, "paused": paused})
+            members.append({
+                "extension": person["extension"],
+                "name": person["name"] or label(member.get("membername")),
+                "status": person["status"],
+                "paused": paused,
+            })
+        queue_results.append({
+            "code": code, "name": name, "strategy": label(queue.get("strategy")),
+            "monitored": code in live_queue_codes, "members": members,
+        })
+
+    ramais = sorted(
+        ({**person, "queues": memberships[identifier]} for identifier, person in people.items()),
+        key=lambda person: (person["extension"], person["name"]),
+    )
+    counts = Counter(person["status"] for person in ramais)
+    known_state = not ramais or counts["unknown"] < len(ramais)
+    known_registration = not ramais or any(person["registered"] is not None for person in ramais)
+    return {
+        "indicators": {
+            "total": len(ramais),
+            "active_calls": nonnegative_int(summary.get("totalCalls")),
+            "available": counts["available"] if known_state else None,
+            "busy": counts["busy"] if known_state else None,
+            "ringing": counts["ringing"] if known_state else None,
+            "registered": sum(person["registered"] is True for person in ramais) if known_registration else None,
+            "unregistered": sum(person["registered"] is False for person in ramais) if known_registration else None,
+            "unknown": counts["unknown"],
+        },
+        "extensions": ramais,
+        "queues": sorted(queue_results, key=lambda queue: queue["name"].casefold()),
+    }
+
+
+def hide_number(value):
+    digits = re.sub(r"\D", "", label(value))
+    if not digits:
+        return ""
+    visible = min(4, len(digits) // 2)
+    return "••••" + (digits[-visible:] if visible else "")
+
+
+def cdr_value(value):
+    text = label(value)
+    return text if re.fullmatch(r"[-\w .:/+]+", text) and "://" not in text else ""
+
+
+def cdr_data(client, start, end, stop):
+    payload = {
+        "datainicial": start.isoformat(), "datafinal": end.isoformat(),
+        "horainicial": "00:00", "horafinal": "23:59", "paginacao": 10,
+    }
+    deadline = time.monotonic() + 50
+    def query(page):
+        if stop.is_set():
+            raise PABXError("config_changed")
+        return client.query(
+            "POST", "relatorio-cdr/search", params={"page": page}, payload=payload, deadline=deadline,
+        ).get("resultado")
+
+    rows = pages(query, limit=100)
+    check_scope(rows, "cliente_id", client.config.cdr_customer)
+    entries = [
+        {
+            "uniqueid": cdr_value(row.get("uniqueid")),
+            "date": cdr_value(row.get("calldate") or row.get("start")),
+            "source": hide_number(row.get("origem")),
+            "destination": hide_number(row.get("destino")),
+            "status": cdr_value(row.get("status")),
+            "direction": cdr_value(row.get("direcao")),
+            "recording": bool(row.get("arquivo_audio")),
+        }
+        for row in rows
+    ]
+    ids = Counter(row["uniqueid"] for row in entries if row["uniqueid"])
+    for row in entries:
+        row["id_occurrences"] = ids.get(row["uniqueid"]) or None
+    return entries
+
+
+class PABXMonitor:
+    def __init__(self, client):
+        self.client = client
+        self._state_lock = threading.Lock()
+        self._history_lock = threading.Lock()
+        self._thread = None
+        self._stop = threading.Event()
+        self._collecting = False
+        self._data = None
+        self._last_success = None
+        self._success_clock = None
+        self._error = None
+        self._history_cache = None
+
+    def _collect(self):
+        with self._state_lock:
+            self._collecting = True
+        try:
+            data = operational_data(self.client, self._stop)
+        except PABXError as error:
+            with self._state_lock:
+                self._error = error.code
+                if error.code in ("forbidden", "scope_mismatch", "credentials"):
+                    self._data = None
+        else:
+            with self._state_lock:
+                self._data = data
+                self._last_success = datetime.now(timezone.utc).isoformat()
+                self._success_clock = time.monotonic()
+                self._error = None
+        finally:
+            with self._state_lock:
+                self._collecting = False
+
+    def _poll(self):
+        while not self._stop.is_set():
+            self._collect()
+            self._stop.wait(self.client.config.interval)
+
+    def start(self, previous=None):
+        def run():
+            if previous is not None:
+                previous.join()
+            self._poll()
+
+        with self._state_lock:
+            self._collecting = True
+            self._thread = threading.Thread(target=run, name="pabx-monitor", daemon=True)
+            self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        return self._thread
+
+    def snapshot(self):
+        interval = self.client.config.interval
+        with self._state_lock:
+            return {
+                "state": self._error or ("connected" if self._data is not None else "starting"),
+                "last_success": self._last_success,
+                "collecting": self._collecting,
+                "stale": self._data is not None and (
+                    self._error is not None or time.monotonic() - self._success_clock > interval * 2
+                ),
+                "data": self._data,
+                "poll_seconds": min(interval, 10),
+            }
+
+    def history(self, start, end):
+        if not self.client.config.cdr_customer:
+            raise PABXError("cdr_disabled")
+        if not self._history_lock.acquire(blocking=False):
+            raise PABXError("history_busy")
+        try:
+            period = (start, end)
+            cached = self._history_cache
+            if cached and cached[0] == period and time.monotonic() < cached[1]:
+                return cached[2]
+            rows = cdr_data(self.client, start, end, self._stop)
+            self._history_cache = (period, time.monotonic() + 60, rows)
+            return rows
+        except PABXError:
+            self._history_cache = None
+            raise
+        finally:
+            self._history_lock.release()
