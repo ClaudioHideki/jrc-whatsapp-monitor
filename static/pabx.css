@@ -58,6 +58,8 @@ html[data-theme="dark"] .pabx {
   font-weight: 700;
 }
 
+.pabx-filters .pabx-recording-filter { display: flex; align-items: center; min-height: 38px; }
+
 .pabx label input:not([type="checkbox"]), .pabx label select { width: 100%; color-scheme: light; }
 html[data-theme="dark"] .pabx label input, html[data-theme="dark"] .pabx label select { color-scheme: dark; }
 .pabx-action {

@@ -130,7 +130,8 @@ em uma fila são exibidos em colunas distintas.
 O CDR apresenta uma linha por registro, inclusive quando o `uniqueid` se
 repete. Gráficos, filtros e exportação CSV usam essa unidade de contagem.
 Origem e destino são mascarados. As gravações elegíveis da mesma origem
-podem ser ouvidas ou baixadas. O áudio é solicitado por GET somente ao clicar
+podem ser ouvidas ou baixadas. **Somente com gravação** filtra os registros já
+consultados e se aplica ao CSV. O áudio é solicitado por GET somente ao clicar
 em **Ouvir gravação** ou **Baixar gravação**. O servidor converte WAV para MP3
 em trânsito, inclusive para WAV com áudio GSM. A URL original
 fica no servidor. A homologação precisa

@@ -206,9 +206,10 @@
   const exportButton = byId("pabx-export");
   const previous = byId("pabx-prev");
   const next = byId("pabx-next");
-  const { start, end, status, direction } = historyForm.elements;
+  const { start, end, status, direction, recording_only: recordingOnly } = historyForm.elements;
   const pageSize = 25;
   let historyPage = 1;
+  let queriedRecords = [];
   let records = [];
   let completedFilters = null;
   let pending = false;
@@ -318,6 +319,23 @@
     next.disabled = historyPage >= pages;
   }
 
+  function applyRecordingFilter() {
+    records = recordingOnly.checked ? queriedRecords.filter((row) => row.recording) : queriedRecords;
+    historyPage = 1;
+    renderHistory();
+    for (const total of historyResults.querySelectorAll("[data-cdr-status]")) {
+      const count = records.filter((row) => row.status.toLocaleLowerCase("pt-BR") === total.dataset.cdrStatus).length;
+      total.textContent = formatCount.format(count);
+    }
+    chart("pabx-status-chart", "status");
+    chart("pabx-direction-chart", "direction");
+    const recording = recordingOnly.checked ? " com gravação" : "";
+    const emptyResult = recordingOnly.checked ? "com gravação" : "retornado";
+    historyNotice(records.length ?
+      `${formatCount.format(records.length)} registros CDR${recording}. IDs repetidos são mantidos.` :
+      `Nenhum registro ${emptyResult} para o período e os filtros selecionados.`);
+  }
+
   async function historyRequest(url, filters) {
     const response = await fetch(url, {
       method: "POST",
@@ -344,6 +362,11 @@
   }
 
   historyForm.addEventListener("change", (event) => {
+    if (event.target === recordingOnly && completedFilters) {
+      applyRecordingFilter();
+      exportButton.disabled = !records.length;
+      return;
+    }
     stopRecording();
     if (event.target === start || event.target === end) {
       options(status, [], "Todas");
@@ -359,7 +382,9 @@
     event.preventDefault();
     if (pending) return;
     stopRecording();
-    const filters = Object.fromEntries(new FormData(historyForm));
+    const formData = new FormData(historyForm);
+    formData.delete("recording_only");
+    const filters = Object.fromEntries(formData);
     completedFilters = null;
     historyResults.hidden = true;
     controls(true);
@@ -368,21 +393,11 @@
       const { records: result, statuses, directions } = await (
         await historyRequest(dashboard.dataset.cdrUrl, filters)
       ).json();
-      records = result;
+      queriedRecords = result;
       completedFilters = filters;
-      historyPage = 1;
       options(status, statuses.map((name) => [name, name]), "Todas");
       options(direction, directions.map((name) => [name, name]), "Todas");
-      renderHistory();
-      for (const total of historyResults.querySelectorAll("[data-cdr-status]")) {
-        const count = records.filter((row) => row.status.toLocaleLowerCase("pt-BR") === total.dataset.cdrStatus).length;
-        total.textContent = formatCount.format(count);
-      }
-      chart("pabx-status-chart", "status");
-      chart("pabx-direction-chart", "direction");
-      historyNotice(records.length ?
-        `${formatCount.format(records.length)} registros CDR. IDs repetidos são mantidos.` :
-        "Nenhum registro retornado para o período e os filtros selecionados.");
+      applyRecordingFilter();
     } catch (error) {
       historyNotice(messages[error.message] || "Falha ao consultar o histórico CDR.", true);
     } finally {
@@ -396,7 +411,9 @@
     if (pending || !completedFilters) return;
     controls(true);
     try {
-      const response = await historyRequest(dashboard.dataset.exportUrl, completedFilters);
+      const response = await historyRequest(dashboard.dataset.exportUrl, {
+        ...completedFilters, recording_only: recordingOnly.checked,
+      });
       const url = URL.createObjectURL(await response.blob());
       const anchor = element("a");
       anchor.href = url;

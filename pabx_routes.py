@@ -86,11 +86,14 @@ def filters_from_request():
     except ValueError:
         raise PABXError("filters") from None
     status, direction = filters.get("status", ""), filters.get("direction", "")
-    if not 0 <= (end - start).days <= 30 or any(
-        not isinstance(value, str) or len(value) > 150 for value in (status, direction)
+    recording_only = filters.get("recording_only", False)
+    if (
+        not 0 <= (end - start).days <= 30
+        or not isinstance(recording_only, bool)
+        or any(not isinstance(value, str) or len(value) > 150 for value in (status, direction))
     ):
         raise PABXError("filters")
-    return start, end, status.casefold(), direction.casefold()
+    return start, end, status.casefold(), direction.casefold(), recording_only
 
 
 def csv_cell(value):
@@ -343,7 +346,7 @@ def register_pabx(app, login_required, login_user, login_password):
         _, _, monitor = service.current() if service else (None, 0, None)
         if monitor is None:
             raise PABXError(config_error or "cdr_disabled")
-        start, end, status, direction = filters_from_request()
+        start, end, status, direction, recording_only = filters_from_request()
         rows = monitor.history(start, end)
         if service.current()[2] is not monitor:
             raise PABXError("config_changed")
@@ -351,6 +354,7 @@ def register_pabx(app, login_required, login_user, login_password):
             row for row in rows
             if (not status or row["status"].casefold() == status)
             and (not direction or row["direction"].casefold() == direction)
+            and (not recording_only or row["recording"])
         ]
         if export:
             return cdr_csv(selected)

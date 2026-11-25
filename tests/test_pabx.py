@@ -403,6 +403,26 @@ class RouteTests(unittest.TestCase):
                 PROFILE,
             )
 
+    def test_recording_filter_and_csv_do_not_request_audio(self):
+        self.service.save(PROFILE, 0)
+        self.sign_in()
+        dates_and_status = {**DATES, "status": "atendida"}
+        with patch("pabx_routes.requests.Session") as media:
+            regular = self.client.post("/api/pabx/cdr", json=dates_and_status)
+            self.assertEqual(len(regular.json["records"]), 2)
+            filtered = {**dates_and_status, "recording_only": True}
+            history = self.client.post("/api/pabx/cdr", json=filtered)
+            self.assertEqual(len(history.json["records"]), 1)
+            self.assertTrue(history.json["records"][0]["recording"])
+            self.assertEqual(history.json["records"][0]["id_occurrences"], 2)
+            exported = self.client.post("/api/pabx/cdr/export", json=filtered)
+            records = exported.get_data(as_text=True).splitlines()
+            self.assertEqual(len(records), 2)
+            self.assertTrue(records[1].endswith(";Sim"))
+            invalid = self.client.post("/api/pabx/cdr", json={**filtered, "recording_only": "true"})
+            self.assertEqual(invalid.status_code, 400)
+            media.assert_not_called()
+
     def test_customer_change_requires_scope_confirmation_again(self):
         self.service.save(PROFILE, 0)
         self.sign_in()
