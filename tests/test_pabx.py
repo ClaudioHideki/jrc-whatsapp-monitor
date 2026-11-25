@@ -402,6 +402,68 @@ class RouteTests(unittest.TestCase):
         with self.client.session_transaction() as state:
             state.update(authenticated=True, username=username, pabx_csrf="a" * 64)
 
+    def test_dokploy_http_profile_is_fixed_for_remote_admin(self):
+        fixed = PABXProfile(company="JRC", url=HTTP_ORIGIN, account="demo", interval=15, cdr_customer="55")
+        self.service.fixed_http_profile = fixed
+        self.sign_in()
+        path = "/monitoramento-pabx/configuracao"
+        remote = {"REMOTE_ADDR": "192.0.2.1"}
+        page = self.client.get(path, environ_overrides=remote)
+        self.assertIn(b'name="company" value="JRC" readonly', page.data)
+        self.assertIn(b'name="account" value="demo" readonly', page.data)
+        self.assertIn(b'name="cdr_customer" value="55" readonly', page.data)
+        self.assertIn(f'value="{HTTP_ORIGIN}" readonly'.encode(), page.data)
+
+        form = {"action": "test", "csrf": "a" * 64, "revision": "0", "email": PROFILE.email, "password": PROFILE.password}
+        for alternate in ("http://other.example.invalid:8080", HTTP_ORIGIN + "/path", PROFILE.url):
+            rejected = self.client.post(path, data={**form, "url": alternate}, environ_overrides=remote)
+            self.assertEqual(rejected.status_code, 400)
+            self.assertEqual(rejected.json["error"], "http_origin")
+        for field, new_value in (("account", "other"), ("cdr_customer", "99"), ("interval", "5")):
+            rejected = self.client.post(path, data={**form, field: new_value}, environ_overrides=remote)
+            self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(self.provider.calls, [])
+
+        self.assertEqual(self.client.post(path, data=form, environ_overrides=remote).status_code, 200)
+        calls = [(method, url.split(HTTP_ORIGIN, 1)[1]) for method, url, _ in self.provider.calls]
+        self.assertEqual(calls, [("POST", "/api/v1/auth/login")] + [
+            ("GET", "/api/v1/admin/ramais"), ("GET", "/api/v1/admin/ramais"),
+            ("GET", "/api/v1/admin/filas"), ("GET", "/api/v1/admin/dashboard-extension"),
+            ("GET", "/api/v1/admin/dashboard-queue"),
+        ])
+        saved = self.client.post(path, data={**form, "action": "save"}, environ_overrides=remote)
+        self.assertEqual(saved.status_code, 303)
+        profile, revision, monitor = self.service.current()
+        self.assertEqual(profile.fixed_fields(), fixed.fixed_fields())
+        self.assertFalse(profile.scope_confirmed)
+        self.assertFalse(profile.cdr_confirmed)
+        self.assertEqual(revision, 1)
+        self.assertIsNone(monitor)
+
+    def test_dokploy_http_requires_its_own_environment_option(self):
+        variables = {
+            "SERVER_SOFTWARE": "gunicorn/27.0.1", "PABX_CONFIG_KEY": Fernet.generate_key().decode(),
+            "PABX_CONFIG_DB": str(Path(self.folder.name) / "dokploy.sqlite3"),
+            "PABX_LOCAL_HTTP_ORIGIN": HTTP_ORIGIN,
+        }
+        with patch.dict("os.environ", variables, clear=True):
+            default = PABXService.from_env()
+            with closing(default._ownership):
+                self.assertFalse(default.transport_allowed(replace(PROFILE, url=HTTP_ORIGIN)))
+            with patch.dict("os.environ", {"PABX_DOKPLOY_HTTP_ORIGIN": HTTP_ORIGIN}):
+                with self.assertRaisesRegex(PABXError, "storage_setup"):
+                    PABXService.from_env()
+            with patch.dict("os.environ", {
+                "PABX_DOKPLOY_HTTP_ORIGIN": HTTP_ORIGIN,
+                "PABX_DOKPLOY_ACCOUNTCODE": "demo", "PABX_DOKPLOY_CDR_CUSTOMER": "55",
+            }):
+                restricted = PABXService.from_env()
+                with closing(restricted._ownership):
+                    profile = restricted.fixed_http_profile
+                    self.assertTrue(restricted.transport_allowed(profile))
+                    self.assertFalse(restricted.transport_allowed(replace(profile, cdr_customer="99")))
+                    self.assertFalse(restricted.transport_allowed(replace(profile, url=PROFILE.url)))
+
     def test_admin_test_save_and_cdr_export_permissions(self):
         self.assertEqual(self.client.get("/monitoramento-pabx/configuracao").status_code, 302)
         self.assertEqual(self.client.get("/api/pabx/status").status_code, 401)

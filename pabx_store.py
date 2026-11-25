@@ -28,8 +28,21 @@ class PABXProfile:
     cdr_customer: str = field(default="", repr=False)
     cdr_confirmed: bool = False
 
+    def fixed_fields(self):
+        return {
+            "company": self.company, "url": self.url, "account": self.account,
+            "interval": str(self.interval), "cdr_customer": self.cdr_customer,
+        }
+
     @classmethod
-    def from_form(cls, form, saved, allowed_http=""):
+    def from_form(cls, form, saved, allowed_http="", fixed=None):
+        if fixed is not None:
+            fields = fixed.fixed_fields()
+            if "url" in form and form["url"] != fixed.url:
+                raise PABXError("http_origin")
+            if any(name in form and form[name] != value for name, value in fields.items()):
+                raise PABXError("connection_fields")
+            form = {**form, **fields}
         submitted_url = form.get("url", "").strip()
         if len(submitted_url) > 500:
             raise PABXError("connection_fields")
@@ -113,11 +126,14 @@ class PABXStore:
 
 
 class PABXService:
-    def __init__(self, store, *, timeout=10, verify=True, client_factory=PABXClient, local_http_origin=""):
+    def __init__(
+        self, store, *, timeout=10, verify=True, client_factory=PABXClient, local_http_origin="", fixed_http_profile=None,
+    ):
         self.store = store
         self.timeout = timeout
         self.verify = verify
         self.local_http_origin = local_http_origin
+        self.fixed_http_profile = fixed_http_profile
         self._client_factory = client_factory
         self._lock = threading.Lock()
         self._test_lock = threading.Lock()
@@ -134,8 +150,19 @@ class PABXService:
         try:
             timeout = int(os.getenv("PABX_TIMEOUT_SECONDS", "10"))
             encoded = secret.encode("ascii")
+            deploy_http = os.getenv("PABX_DOKPLOY_HTTP_ORIGIN", "").strip().rstrip("/")
+            fixed_http_profile = None
+            if deploy_http:
+                account = os.getenv("PABX_DOKPLOY_ACCOUNTCODE", "").strip()
+                cdr_customer = os.getenv("PABX_DOKPLOY_CDR_CUSTOMER", "").strip()
+                if not deploy_http.startswith("http://") or not 1 <= len(account) <= 150 or len(cdr_customer) > 150:
+                    raise ValueError
+                fixed_http_profile = PABXProfile(
+                    company="JRC", url=pabx_origin(deploy_http, deploy_http), account=account,
+                    interval=15, cdr_customer=cdr_customer,
+                )
             local_http = os.getenv("PABX_LOCAL_HTTP_ORIGIN", "").strip().rstrip("/")
-            if os.getenv("SERVER_SOFTWARE", "").startswith("gunicorn/"):
+            if fixed_http_profile or os.getenv("SERVER_SOFTWARE", "").startswith("gunicorn/"):
                 local_http = ""
             if local_http:
                 if not local_http.startswith("http://"):
@@ -160,6 +187,7 @@ class PABXService:
         try:
             service = cls(
                 store, timeout=timeout, verify=os.getenv("PABX_CA_BUNDLE") or True, local_http_origin=local_http,
+                fixed_http_profile=fixed_http_profile,
             )
         except BaseException:
             ownership.close()
@@ -175,6 +203,8 @@ class PABXService:
         )
 
     def transport_allowed(self, profile):
+        if self.fixed_http_profile is not None:
+            return profile.fixed_fields() == self.fixed_http_profile.fixed_fields()
         return not profile.url.startswith("http://") or profile.url == self.local_http_origin
 
     def _replace_monitor(self):

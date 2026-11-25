@@ -33,26 +33,26 @@
     {% endfor %}
     {% if message %}<p class="pabx-notice" role="alert">{{ message }}</p>{% endif %}
     {% if allowed_http %}
-    <p class="pabx-notice">O endereço HTTP autorizado nesta execução local permite consultas operacionais e, com o escopo confirmado, consultas ao CDR. O tráfego até o PABX não é criptografado.</p>
+    <p class="pabx-notice">O endereço HTTP autorizado permite consultas operacionais e, com o escopo confirmado, consultas ao CDR. O tráfego até o PABX não é criptografado.</p>
     {% endif %}
     <form id="pabx-settings-form" action="{{ url_for('pabx.settings') }}" method="post">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="hidden" name="revision" value="{{ revision }}">
       <fieldset class="pabx-form-grid">
         <legend>Conexão</legend>
-        <label>Empresa ou cliente <input name="company" value="{{ profile.company }}" required maxlength="150"></label>
-        <label>URL do servidor <input name="url" type="url" placeholder="https://pabx.example.invalid" value="{{ profile.url }}" required maxlength="500"></label>
+        <label>Empresa ou cliente <input name="company" value="{{ profile.company }}" {% if fixed %}readonly{% else %}required{% endif %} maxlength="150"></label>
+        <label>URL do servidor <input name="url" type="url" placeholder="https://pabx.example.invalid" value="{{ profile.url }}" {% if fixed %}readonly{% else %}required{% endif %} maxlength="500"></label>
         <label>Login do PABX <input name="email" autocomplete="off" placeholder="{{ 'Login salvo' if profile.email else 'monitor@example.invalid' }}" {% if not profile.email %}required{% endif %} maxlength="254"></label>
         <label>Senha do PABX <input name="password" type="password" autocomplete="new-password" placeholder="{{ 'Senha salva' if profile.password else '' }}" {% if not profile.password %}required{% endif %} maxlength="1024"></label>
-        <label>Intervalo de atualização em segundos <input name="interval" type="number" min="5" max="3600" value="{{ profile.interval }}" required></label>
+        <label>Intervalo de atualização em segundos <input name="interval" type="number" min="5" max="3600" value="{{ profile.interval }}" {% if fixed %}readonly{% else %}required{% endif %}></label>
         <label class="pabx-check"><input name="enabled" type="checkbox" value="1" {% if profile.enabled %}checked{% endif %}> Ativar monitoramento</label>
       </fieldset>
       <fieldset class="pabx-form-grid">
         <legend>Escopo de consulta</legend>
-        <label>Código da conta (accountcode) <input name="account" value="{{ profile.account }}" required maxlength="150"></label>
-        <label>Identificador do cliente no CDR (cliente_id) <input name="cdr_customer" value="{{ profile.cdr_customer }}" maxlength="150"></label>
+        <label>Código da conta (accountcode) <input name="account" value="{{ profile.account }}" {% if fixed %}readonly{% else %}required{% endif %} maxlength="150"></label>
+        <label>Identificador do cliente no CDR (cliente_id) <input name="cdr_customer" value="{{ profile.cdr_customer }}" {% if fixed %}readonly{% endif %} maxlength="150"></label>
         <label class="pabx-check"><input name="scope_confirmed" type="checkbox" value="1" {% if profile.scope_confirmed %}checked{% endif %}> Confirmei a segregação das rotas operacionais</label>
-        <label class="pabx-check"><input name="cdr_confirmed" type="checkbox" value="1" {% if profile.cdr_confirmed %}checked{% endif %}> Confirmei a segregação da rota de histórico CDR</label>
+        <label class="pabx-check"><input name="cdr_confirmed" type="checkbox" value="1" {% if profile.cdr_confirmed %}checked{% endif %} {% if fixed and not profile.cdr_customer %}disabled{% endif %}> Confirmei a segregação da rota de histórico CDR</label>
       </fieldset>
       <div class="pabx-form-actions">
         <button id="pabx-test" class="clear-btn" type="button">Testar conexão</button>

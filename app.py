@@ -204,5 +204,6 @@ def api_status():
     return jsonify(get_monitor_data())
 
 if __name__ == "__main__":
-    host = "127.0.0.1" if os.getenv("PABX_LOCAL_HTTP_ORIGIN") else "0.0.0.0"
+    http_enabled = os.getenv("PABX_LOCAL_HTTP_ORIGIN") or os.getenv("PABX_DOKPLOY_HTTP_ORIGIN")
+    host = "127.0.0.1" if http_enabled else "0.0.0.0"
     app.run(host=host, port=5000, debug=False)

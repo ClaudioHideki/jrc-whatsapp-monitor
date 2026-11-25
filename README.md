@@ -162,8 +162,8 @@ autorizar uma única origem HTTP exata, formada pelo esquema, endereço e porta
 do PABX. Use esse ajuste somente quando o tráfego sem criptografia até o PABX
 for aceito para o ambiente. O formulário aceita essa origem em uma sessão
 local. O servidor de desenvolvimento escuta em loopback com essa opção ativa.
-O Gunicorn ignora essa configuração e exige uma origem HTTPS. Guarde a origem
-na configuração persistente do servidor local para retomar a coleta após reiniciar.
+O Gunicorn ignora essa variável. Guarde a origem na configuração persistente
+do servidor local para retomar a coleta após reiniciar.
 
 Nesse modo, a coleta automática usa POST para obter ou renovar o token e
 GET para as listas e os dashboards de ramais e filas.
@@ -171,6 +171,26 @@ O dashboard informa o total de chamadas ativas e identifica os ramais em
 ligação pelo campo `extensionsInCall` da resposta do escopo autorizado.
 Com o cliente CDR confirmado, **Consultar** e **Exportar CSV** usam o POST
 de pesquisa do CDR. O servidor valida o `cliente_id` em todas as páginas.
+
+### Origem HTTP fixa no Dokploy
+
+Por padrão, o Dokploy usa HTTPS para o PABX. Para autorizar uma única origem
+HTTP no Dokploy, configure estas variáveis no ambiente do serviço:
+
+```env
+PABX_DOKPLOY_HTTP_ORIGIN=http://pabx.example.invalid:8080
+PABX_DOKPLOY_ACCOUNTCODE=conta-autorizada
+PABX_DOKPLOY_CDR_CUSTOMER=cliente-autorizado
+```
+
+A última variável é opcional e só deve ser preenchida com o ID confirmado
+no CDR. O formulário mostra os dados fixos da JRC, incluindo o intervalo de
+15 segundos, e permite digitar o login e a senha. As confirmações dos escopos
+e a ativação continuam sob controle do administrador. Uma configuração já
+salva que divergir da origem ou do escopo fixo precisa ser recadastrada.
+
+Nesse modo, o painel pode continuar em HTTPS. O tráfego do servidor do monitor
+até a origem HTTP, incluindo as credenciais e o token, segue sem criptografia.
 
 ### Testes locais
 

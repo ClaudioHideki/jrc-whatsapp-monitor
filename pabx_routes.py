@@ -66,7 +66,7 @@ ADMIN_MESSAGES = {
     "collector_busy": "Outra instância do monitor está usando o mesmo banco do PABX.",
     "configuration": "Defina uma senha de acesso exclusiva e uma SECRET_KEY forte para o monitor.",
     "connection_fields": "Confira os campos obrigatórios, a URL do servidor e o intervalo de 5 a 3600 segundos.",
-    "http_origin": "Use HTTPS ou o endereço HTTP autorizado para este monitor local.",
+    "http_origin": "Use HTTPS ou o endereço HTTP autorizado no servidor do monitor.",
     "config_changed": "A configuração foi alterada. Recarregue a página antes de continuar.",
     "connection_busy": "Já existe um teste de conexão em andamento.",
     "csrf": "A sessão do formulário expirou. Recarregue a página.",
@@ -359,7 +359,12 @@ def register_pabx(app, login_required, login_user, login_password):
 
         profile, revision, _ = service.current()
         csrf = session.setdefault("pabx_csrf", secrets.token_hex(32))
-        allowed_http = service.local_http_origin if request.remote_addr in ("127.0.0.1", "::1") else ""
+        fixed = service.fixed_http_profile
+        if fixed:
+            allowed_http = fixed.url
+        else:
+            allowed_http = service.local_http_origin if request.remote_addr in ("127.0.0.1", "::1") else ""
+        display_profile = fixed if fixed and not service.transport_allowed(profile) else profile
         message = None
         if request.method == "POST":
             if request.content_length is None or request.content_length > 16384:
@@ -371,7 +376,7 @@ def register_pabx(app, login_required, login_user, login_password):
                     raise PABXError("csrf")
                 if request.form.get("revision") != str(revision):
                     raise PABXError("config_changed")
-                submitted = PABXProfile.from_form(request.form, profile, allowed_http)
+                submitted = PABXProfile.from_form(request.form, display_profile, allowed_http, fixed=fixed)
                 if mode == "test":
                     service.test(submitted)
                     test_message = (
@@ -407,12 +412,12 @@ def register_pabx(app, login_required, login_user, login_password):
                 if mode == "test":
                     return jsonify(error=error.code, message=message), ERROR_STATUS.get(error.code, 502)
                 return render_template(
-                    "pabx_settings.html", profile=profile, revision=revision, csrf=csrf, message=message,
-                    allowed_http=allowed_http,
+                    "pabx_settings.html", profile=display_profile, revision=revision, csrf=csrf, message=message,
+                    allowed_http=allowed_http, fixed=fixed,
                 ), ERROR_STATUS.get(error.code, 502)
         return render_template(
-            "pabx_settings.html", profile=profile, revision=revision, csrf=csrf, message=message,
-            allowed_http=allowed_http,
+            "pabx_settings.html", profile=display_profile, revision=revision, csrf=csrf, message=message,
+            allowed_http=allowed_http, fixed=fixed,
         )
 
     @routes.get("/api/pabx/status")
