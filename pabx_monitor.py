@@ -365,6 +365,8 @@ def cdr_data(client, start, end, stop, recording_key, extensions):
 
 
 class PABXMonitor:
+    BLOCKED_DATA_ERRORS = frozenset(("forbidden", "scope_mismatch", "credentials", "token_rejected", "token_expired"))
+
     def __init__(self, client):
         self.client = client
         self._state_lock = threading.Lock()
@@ -388,9 +390,10 @@ class PABXMonitor:
         except PABXError as error:
             with self._state_lock:
                 self._error = error.code
-                if error.code in ("forbidden", "scope_mismatch", "credentials"):
+                if error.code in self.BLOCKED_DATA_ERRORS:
                     self._data = None
                     self._recording_extensions = {}
+                    self._history_cache = None
         else:
             with self._state_lock:
                 self._data = data
@@ -443,16 +446,22 @@ class PABXMonitor:
             raise PABXError("history_busy")
         try:
             period = (start, end)
-            cached = self._history_cache
-            if cached and cached[0] == period and time.monotonic() < cached[1]:
-                return cached[2]
             with self._state_lock:
+                if self._error in self.BLOCKED_DATA_ERRORS:
+                    raise PABXError(self._error)
+                cached = self._history_cache
+                if cached and cached[0] == period and time.monotonic() < cached[1]:
+                    return cached[2]
                 extensions = self._recording_extensions
             rows, recordings = cdr_data(self.client, start, end, self._stop, self._recording_key, extensions)
-            self._history_cache = (period, time.monotonic() + 60, rows, recordings)
+            with self._state_lock:
+                if self._error in self.BLOCKED_DATA_ERRORS:
+                    raise PABXError(self._error)
+                self._history_cache = (period, time.monotonic() + 60, rows, recordings)
             return rows
         except PABXError:
-            self._history_cache = None
+            with self._state_lock:
+                self._history_cache = None
             raise
         finally:
             self._history_lock.release()
@@ -460,8 +469,13 @@ class PABXMonitor:
     def recording_url(self, recording_id):
         return self.recording_entries([recording_id])[0].url
 
+    def accepts_recordings(self):
+        with self._state_lock:
+            return not self._stop.is_set() and self._error not in self.BLOCKED_DATA_ERRORS
+
     def recording_entries(self, recording_ids):
-        cached = self._history_cache
-        if self._stop.is_set() or cached is None or any(recording_id not in cached[3] for recording_id in recording_ids):
-            raise PABXError("recording_missing")
-        return [cached[3][recording_id] for recording_id in recording_ids]
+        with self._state_lock:
+            cached = self._history_cache
+            if self._stop.is_set() or cached is None or any(recording_id not in cached[3] for recording_id in recording_ids):
+                raise PABXError("recording_missing")
+            return [cached[3][recording_id] for recording_id in recording_ids]

@@ -44,11 +44,15 @@ ERROR_STATUS = {
     "recording_missing": 404,
     "recording_range": 416,
     "recording_selection": 400,
+    "recording_busy": 409,
     "timeout": 504,
     "unavailable": 503,
 }
 
 WAV_TYPES = frozenset(("audio/wav", "audio/x-wav", "audio/wave"))
+MAX_ZIP_RECORDINGS = 1000
+MAX_ZIP_REQUEST_BYTES = 96000
+MAX_ZIP_AUDIO_BYTES = 256 * 1024 * 1024
 RECORDING_EXTENSIONS = {
     **dict.fromkeys(WAV_TYPES, "wav"),
     "audio/mpeg": "mp3",
@@ -244,21 +248,28 @@ def recording_archive(recordings, config, is_current):
     output = ZipOutput()
     warnings = []
     names = Counter()
+    remaining = MAX_ZIP_AUDIO_BYTES
     with ZipFile(output, "w") as archive:
         for index, recording in enumerate(recordings, 1):
             if not is_current():
-                warnings.append("A configuração mudou. Os arquivos restantes não foram incluídos.")
+                warnings.append("O acesso às gravações mudou. Os arquivos restantes não foram incluídos.")
                 break
 
             filename = None
             try:
+                if not remaining:
+                    raise PABXError("archive_limit")
                 with closing(stream_recording(recording.url, config, strict=True)) as audio:
                     if audio.status_code != 200:
                         raise PABXError("recording_missing")
+                    if int(audio.headers.get("Content-Length", 0)) > remaining:
+                        raise PABXError("archive_limit")
                     chunks = iter(audio.response)
                     first = next(chunks, None)
                     if not first:
                         raise PABXError("recording_missing")
+                    if len(first) > remaining:
+                        raise PABXError("archive_limit")
                     extension = RECORDING_EXTENSIONS[audio.mimetype]
                     filename = f"{recording.filename_base}.{extension}"
                     names[filename] += 1
@@ -266,9 +277,16 @@ def recording_archive(recordings, config, is_current):
                         filename = f"{recording.filename_base}_{names[filename]}.{extension}"
                     with archive.open(filename, "w", force_zip64=True) as entry:
                         for chunk in chain((first,), chunks):
+                            if len(chunk) > remaining:
+                                raise PABXError("archive_limit")
                             entry.write(chunk)
+                            remaining -= len(chunk)
                             yield from output.drain()
-            except PABXError:
+            except PABXError as error:
+                if error.code == "archive_limit":
+                    affected = f"{filename} ficou incompleto." if filename else f"A gravação {index} ficou de fora."
+                    warnings.append(f"Limite de tamanho do ZIP atingido. {affected} Os arquivos restantes ficaram de fora.")
+                    break
                 warnings.append(
                     f"{filename} pode estar incompleto." if filename else f"A gravação {index} não pôde ser incluída."
                 )
@@ -285,6 +303,8 @@ def valid_csrf(value):
 
 def register_pabx(app, login_required, login_user, login_password):
     routes = Blueprint("pabx", __name__)
+    media_slots = threading.BoundedSemaphore(2)
+    zip_slot = threading.Lock()
     try:
         if not login_user.strip() or login_password in ("", "admin", "trocar_senha") or len(app.secret_key) < 32:
             raise PABXError("configuration")
@@ -438,16 +458,21 @@ def register_pabx(app, login_required, login_user, login_password):
         _, _, monitor = service.current() if service else (None, 0, None)
         if monitor is None or not re.fullmatch(r"[a-f0-9]{64}", recording_id):
             raise PABXError("recording_missing")
-        result = stream_recording(
-            monitor.recording_url(recording_id), monitor.client.config,
-            method=request.method, requested_range=request.headers.get("Range"),
-        )
-        if service.current()[2] is not monitor:
-            result.close()
-            raise PABXError("config_changed")
-        if request.args.get("download") == "1":
-            extension = RECORDING_EXTENSIONS[result.mimetype]
-            result.headers.set("Content-Disposition", "attachment", filename=f"gravacao-pabx.{extension}")
+        with ExitStack() as slots:
+            if not media_slots.acquire(blocking=False):
+                raise PABXError("recording_busy")
+            slots.callback(media_slots.release)
+            result = stream_recording(
+                monitor.recording_url(recording_id), monitor.client.config,
+                method=request.method, requested_range=request.headers.get("Range"),
+            )
+            if service.current()[2] is not monitor or not monitor.accepts_recordings():
+                result.close()
+                raise PABXError("config_changed")
+            if request.args.get("download") == "1":
+                extension = RECORDING_EXTENSIONS[result.mimetype]
+                result.headers.set("Content-Disposition", "attachment", filename=f"gravacao-pabx.{extension}")
+            result.call_on_close(slots.pop_all().close)
         return result
 
     @routes.post("/api/pabx/recordings/zip")
@@ -456,21 +481,33 @@ def register_pabx(app, login_required, login_user, login_password):
         _, _, monitor = service.current() if service else (None, 0, None)
         if monitor is None or not monitor.client.config.cdr_customer:
             raise PABXError("cdr_disabled")
-        if not 0 < (request.content_length or 0) <= 96000:
+        if not 0 < (request.content_length or 0) <= MAX_ZIP_REQUEST_BYTES:
             raise PABXError("recording_selection")
         if not valid_csrf(request.form.get("csrf", "")):
             raise PABXError("csrf")
         ids = request.form.getlist("recording_id")
-        if not 1 <= len(ids) <= 1000 or any(not re.fullmatch(r"[a-f0-9]{64}", value) for value in ids):
+        if not 1 <= len(ids) <= MAX_ZIP_RECORDINGS or any(not re.fullmatch(r"[a-f0-9]{64}", value) for value in ids):
             raise PABXError("recording_selection")
 
         recordings = monitor.recording_entries(dict.fromkeys(ids))
         if service.current()[2] is not monitor:
             raise PABXError("config_changed")
-        return Response(
-            recording_archive(recordings, monitor.client.config, lambda: service.current()[2] is monitor),
-            content_type="application/zip",
-            headers={"Content-Disposition": 'attachment; filename="gravacoes-pabx.zip"'},
-        )
+        with ExitStack() as slots:
+            if not zip_slot.acquire(blocking=False):
+                raise PABXError("recording_busy")
+            slots.callback(zip_slot.release)
+            if not media_slots.acquire(blocking=False):
+                raise PABXError("recording_busy")
+            slots.callback(media_slots.release)
+            result = Response(
+                recording_archive(
+                    recordings, monitor.client.config,
+                    lambda: service.current()[2] is monitor and monitor.accepts_recordings(),
+                ),
+                content_type="application/zip",
+                headers={"Content-Disposition": 'attachment; filename="gravacoes-pabx.zip"'},
+            )
+            result.call_on_close(slots.pop_all().close)
+        return result
 
     app.register_blueprint(routes)

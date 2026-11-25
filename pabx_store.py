@@ -135,6 +135,8 @@ class PABXService:
             timeout = int(os.getenv("PABX_TIMEOUT_SECONDS", "10"))
             encoded = secret.encode("ascii")
             local_http = os.getenv("PABX_LOCAL_HTTP_ORIGIN", "").strip().rstrip("/")
+            if os.getenv("SERVER_SOFTWARE", "").startswith("gunicorn/"):
+                local_http = ""
             if local_http:
                 if not local_http.startswith("http://"):
                     raise ValueError

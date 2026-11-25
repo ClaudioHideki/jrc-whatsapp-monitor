@@ -1,4 +1,5 @@
 import os
+import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
@@ -12,7 +13,9 @@ from pabx_routes import register_pabx
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "change-me")
+configured_secret = os.getenv("SECRET_KEY", "")
+valid_secret = configured_secret.strip() not in ("", "change-me", "trocar_secret_key_bem_grande")
+app.secret_key = configured_secret if valid_secret else secrets.token_hex(32)
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
@@ -20,7 +23,10 @@ app.config.update(
 )
 
 LOGIN_USER = os.getenv("LOGIN_USER", "admin")
-LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD", "admin")
+LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD", "")
+LOGIN_CONFIGURED = bool(
+    valid_secret and LOGIN_USER.strip() and LOGIN_PASSWORD.strip() not in ("", "admin", "trocar_senha")
+)
 
 def load_sources():
     sources = []
@@ -157,9 +163,9 @@ def get_monitor_data():
     }
 
 def login_required():
-    return session.get("authenticated") is True
+    return LOGIN_CONFIGURED and session.get("authenticated") is True
 
-register_pabx(app, login_required, LOGIN_USER, LOGIN_PASSWORD)
+register_pabx(app, login_required, LOGIN_USER, LOGIN_PASSWORD if LOGIN_CONFIGURED else "")
 
 @app.route("/", methods=["GET"])
 def index():
@@ -167,6 +173,8 @@ def index():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    if not LOGIN_CONFIGURED:
+        return render_template("login.html", error="Configure o acesso ao monitor no servidor."), 503
     if request.method == "POST":
         username = request.form.get("username", "")
         password = request.form.get("password", "")
@@ -196,4 +204,5 @@ def api_status():
     return jsonify(get_monitor_data())
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    host = "127.0.0.1" if os.getenv("PABX_LOCAL_HTTP_ORIGIN") else "0.0.0.0"
+    app.run(host=host, port=5000, debug=False)

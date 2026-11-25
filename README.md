@@ -88,6 +88,8 @@ associar usuários aos IDs e iniciar um coletor por perfil autorizado.
 1. Instale as dependências e copie `.env.example` conforme a seção para Windows.
    Defina uma senha do monitor exclusiva e uma `SECRET_KEY` aleatória com pelo
    menos 32 caracteres. Mantenha esses valores no ambiente ou no `.env` local.
+   O login do painel fica indisponível enquanto a senha ou a chave de sessão
+   estiver ausente ou com um dos valores iniciais do projeto.
 2. Gere uma chave separada para criptografar a configuração.
 
    ```powershell
@@ -102,7 +104,10 @@ associar usuários aos IDs e iniciar um coletor por perfil autorizado.
    único processo coletor, inclusive durante a troca de workers. Em produção,
    sirva o monitor atrás de HTTPS e defina
    `SESSION_COOKIE_SECURE=1`. A coleta reinicia com o servidor em execução
-   quando a configuração persistida está ativa.
+   quando a configuração persistida está ativa. Configure 15 segundos para a
+   cadência homologada. A pausa começa depois de cada ciclo. Um ciclo faz
+   quatro GETs quando as duas listagens cabem em uma página cada. O histórico,
+   a exportação e as gravações são consultados sob demanda.
 4. Em **Monitoramento PABX → Configuração**, informe a empresa, a origem HTTPS
    do PABX, login de leitura, senha, intervalo e `accountcode`. Para uma CA
    privada, monte o arquivo PEM e informe o caminho em `PABX_CA_BUNDLE`. O
@@ -142,8 +147,10 @@ de até 31 dias e até 100 páginas. Se o limite for excedido, reduza o período
 **Baixar gravações (ZIP)** inclui os áudios elegíveis dos resultados filtrados
 em todas as páginas. O botão solicita os arquivos por GET somente no clique, e
 o servidor envia o ZIP em fluxo contínuo. Referências iguais entram uma única
-vez. Se um áudio falhar durante a geração, o ZIP inclui `resultado.txt` com
-as gravações afetadas.
+vez. Cada ZIP aceita até 1.000 referências e 256 MiB de áudio, mais os
+cabeçalhos do arquivo. O servidor aceita um ZIP por vez e até dois fluxos
+de áudio simultâneos, contando o ZIP. Se uma gravação falhar ou o limite for
+atingido, `resultado.txt` identifica arquivos omitidos ou incompletos.
 Os nomes usam a data e a hora do CDR e o ramal identificado no cadastro da
 conta, como `gravacao-2026-11-05_09-00-00_ramal-101.mp3`. Quando o ramal
 não pode ser identificado, o nome termina em `ramal-nao-identificado`.
@@ -154,8 +161,9 @@ Na execução restrita ao computador local, `PABX_LOCAL_HTTP_ORIGIN` pode
 autorizar uma única origem HTTP exata, formada pelo esquema, endereço e porta
 do PABX. Use esse ajuste somente quando o tráfego sem criptografia até o PABX
 for aceito para o ambiente. O formulário aceita essa origem em uma sessão
-local. Guarde a origem na configuração persistente do servidor local para
-retomar a coleta após reiniciar.
+local. O servidor de desenvolvimento escuta em loopback com essa opção ativa.
+O Gunicorn ignora essa configuração e exige uma origem HTTPS. Guarde a origem
+na configuração persistente do servidor local para retomar a coleta após reiniciar.
 
 Nesse modo, a coleta automática usa POST para obter ou renovar o token e
 GET para as listas e os dashboards de ramais e filas.

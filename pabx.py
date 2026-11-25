@@ -185,7 +185,7 @@ class PABXClient:
                     raise PABXError("credentials")
                 data = self._read(response)
                 token = data.get("token") or data.get("access_token")
-                if not isinstance(token, str) or not token or any(char.isspace() for char in token):
+                if not isinstance(token, str) or not token or any(not 33 <= ord(char) <= 126 for char in token):
                     raise PABXError("upstream_response")
                 now = time.time()
                 renew_at = _token_expiry(data, token, now)

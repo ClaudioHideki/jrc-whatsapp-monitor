@@ -35,6 +35,7 @@
     config_changed: "A configuração mudou durante a consulta. Consulte novamente.",
     recording_missing: "Consulte o histórico novamente para atualizar as referências das gravações.",
     recording_selection: "A seleção de gravações para o ZIP é inválida.",
+    recording_busy: "Há downloads ou reprodução em andamento. Aguarde para tentar novamente.",
     csrf: "A sessão do formulário expirou. Recarregue a página.",
   };
   const search = byId("pabx-search");

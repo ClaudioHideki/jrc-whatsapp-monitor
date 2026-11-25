@@ -10,7 +10,7 @@ from contextlib import closing
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from zipfile import ZipFile
 
 import requests
@@ -184,6 +184,16 @@ class ClientTests(unittest.TestCase):
                 client.query("GET", "ramais")
         self.assertEqual(len(calls), 4)
 
+    def test_malformed_token_never_becomes_an_authorization_header(self):
+        for invalid in ("token\x00", "token\x7f", "token☃", "token com espaço"):
+            with self.subTest(invalid=invalid):
+                transport = Mock(return_value=response(200, {"token": invalid}))
+                client = PABXClient(CONFIG, transport)
+                with self.assertRaisesRegex(PABXError, "upstream_response"):
+                    client.query("GET", "ramais")
+                self.assertEqual(transport.call_count, 1)
+                self.assertEqual(transport.call_args.args[0], "POST")
+
     def test_unavailable_forbidden_and_invalid_json(self):
         for status, error in [(403, "forbidden"), (503, "unavailable"), (302, "upstream_response")]:
             provider = Provider()
@@ -317,6 +327,27 @@ class MonitorTests(unittest.TestCase):
             monitor.history(date(2026, 11, 2), date(2026, 11, 7))
         provider.cdr = []
         self.assertEqual(monitor.history(date(2026, 11, 2), date(2026, 11, 7)), [])
+
+    def test_permission_loss_invalidates_cached_cdr_and_recordings(self):
+        provider = Provider()
+        media = f"{PROFILE.url}/recordings/fixture.mp3"
+        provider.cdr = [{**CDR[0], "arquivo_audio": media}]
+        monitor = PABXMonitor(PABXClient(CONFIG, provider))
+        period = (date(2026, 11, 1), date(2026, 11, 7))
+        recording_id = monitor.history(*period)[0]["recording_id"]
+        self.assertEqual(monitor.recording_url(recording_id), media)
+        provider.failure = 403
+        monitor._collect()
+        self.assertFalse(monitor.accepts_recordings())
+        with self.assertRaisesRegex(PABXError, "recording_missing"):
+            monitor.recording_url(recording_id)
+        with self.assertRaisesRegex(PABXError, "forbidden"):
+            monitor.history(*period)
+        provider.failure = None
+        monitor._collect()
+        with self.assertRaisesRegex(PABXError, "recording_missing"):
+            monitor.recording_url(recording_id)
+        self.assertEqual(monitor.history(*period)[0]["recording_id"], recording_id)
 
     def test_encrypted_profiles_and_start_without_a_browser(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -500,6 +531,46 @@ class RouteTests(unittest.TestCase):
                 self.assertIn("A gravação 2 não pôde", tracks.read("resultado.txt").decode())
             partial.close()
 
+            upstream.reset_mock()
+            upstream.side_effect = audio_response
+            too_many = self.client.post(zip_url, data={**form, "recording_id": [ids[0]] * 1001})
+            self.assertEqual(too_many.json["error"], "recording_selection")
+            upstream.assert_not_called()
+            with patch("pabx_routes.MAX_ZIP_AUDIO_BYTES", 8):
+                with self.client.post(zip_url, data=form, buffered=True) as limited:
+                    with ZipFile(io.BytesIO(limited.data)) as tracks:
+                        self.assertEqual(tracks.namelist(), [filename, "resultado.txt"])
+                        self.assertEqual(tracks.read(filename), b"primeiro")
+                        self.assertIn("Limite de tamanho", tracks.read("resultado.txt").decode())
+
+            upstream.reset_mock()
+            with self.client.post(zip_url, data=form, buffered=False) as open_zip:
+                self.assertEqual(open_zip.status_code, 200)
+                self.assertEqual(self.client.post(zip_url, data=form).json["error"], "recording_busy")
+                media_url = f"/api/pabx/recordings/{ids[0]}"
+                with self.client.get(media_url, buffered=False) as open_mp3:
+                    self.assertEqual(open_mp3.status_code, 200)
+                    self.assertEqual(self.client.get(media_url).json["error"], "recording_busy")
+                self.assertEqual(upstream.call_count, 2)
+            with self.client.post(zip_url, data=form, buffered=True) as retried:
+                self.assertEqual(retried.status_code, 200)
+
+    def test_zip_stops_unknown_length_audio_at_the_size_limit(self):
+        from types import SimpleNamespace
+        from flask import Response
+        from pabx_routes import recording_archive
+
+        recordings = [SimpleNamespace(url=PROFILE.url, filename_base="first"),
+                      SimpleNamespace(url=PROFILE.url, filename_base="second")]
+        response = Response(iter((b"123", b"456", b"789")), content_type="audio/mpeg")
+        with patch("pabx_routes.stream_recording", return_value=response) as audio, patch("pabx_routes.MAX_ZIP_AUDIO_BYTES", 5):
+            with ZipFile(io.BytesIO(b"".join(recording_archive(recordings, CONFIG, lambda: True)))) as tracks:
+                self.assertIsNone(tracks.testzip())
+                self.assertEqual(tracks.namelist(), ["first.mp3", "resultado.txt"])
+                self.assertEqual(tracks.read("first.mp3"), b"123")
+                self.assertIn("first.mp3 ficou incompleto", tracks.read("resultado.txt").decode())
+            audio.assert_called_once()
+
     def test_customer_change_requires_scope_confirmation_again(self):
         self.service.save(PROFILE, 0)
         self.sign_in()
@@ -615,19 +686,30 @@ class RouteTests(unittest.TestCase):
 
 
 class WhatsAppTests(unittest.TestCase):
-    def test_original_page_and_get_only_provider(self):
-        from app import app
+    def test_login_rejects_public_default_password_or_session_key(self):
+        import runpy
 
-        client = app.test_client()
-        self.assertEqual(client.get("/api/status").status_code, 401)
-        with client.session_transaction() as state:
-            state.update(authenticated=True, username="demo")
-        self.assertEqual(client.get("/dashboard").status_code, 200)
-        with patch.dict("os.environ", {
+        for dummy in ({}, {"LOGIN_PASSWORD": "admin", "SECRET_KEY": "fixture-long-key-1234567890-12345"},
+                      {"LOGIN_PASSWORD": "fixture-unique", "SECRET_KEY": "trocar_secret_key_bem_grande"}):
+            with patch.dict("os.environ", dummy, clear=True), patch("dotenv.load_dotenv"):
+                client = runpy.run_module("app", run_name="audit_app")["app"].test_client()
+                with client.session_transaction() as state:
+                    state.update(authenticated=True, username="admin")
+                self.assertEqual(client.get("/api/status").status_code, 401)
+                self.assertEqual(client.post("/login", data={"username": "admin", "password": "admin"}).status_code, 503)
+
+    def test_original_page_and_get_only_provider(self):
+        import app as module
+
+        client = module.app.test_client()
+        with patch.multiple(module, LOGIN_CONFIGURED=True, LOGIN_USER="demo", LOGIN_PASSWORD="fixture-pass"), patch.dict("os.environ", {
             "EVOLUTION_01_NAME": "WhatsApp teste",
             "EVOLUTION_01_URL": "https://whatsapp.example.invalid",
             "EVOLUTION_01_KEY": "fixture",
         }, clear=True), patch("app.requests.get", return_value=response(200, [{"connectionStatus": "open"}])) as api:
+            self.assertEqual(client.get("/api/status").status_code, 401)
+            self.assertEqual(client.post("/login", data={"username": "demo", "password": "fixture-pass"}).status_code, 302)
+            self.assertEqual(client.get("/dashboard").status_code, 200)
             status = client.get("/api/status")
         self.assertEqual(status.json["summary"]["connected"], 1)
         self.assertEqual(api.call_args.args[0], "https://whatsapp.example.invalid/instance/fetchInstances")
