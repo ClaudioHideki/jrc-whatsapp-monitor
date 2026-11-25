@@ -33,7 +33,7 @@
     {% endfor %}
     {% if message %}<p class="pabx-notice" role="alert">{{ message }}</p>{% endif %}
     {% if allowed_http %}
-    <p class="pabx-notice">O endereço HTTP autorizado nesta execução local permite consultar as listas e os dashboards de ramais e filas. O tráfego até o PABX não é criptografado.</p>
+    <p class="pabx-notice">O endereço HTTP autorizado nesta execução local permite consultas operacionais e, com o escopo confirmado, consultas ao CDR. O tráfego até o PABX não é criptografado.</p>
     {% endif %}
     <form id="pabx-settings-form" action="{{ url_for('pabx.settings') }}" method="post">
       <input type="hidden" name="csrf" value="{{ csrf }}">

@@ -23,7 +23,8 @@
   </div>
 </header>
 <main class="container pabx" data-status-url="{{ url_for('pabx.status') }}" data-revision="{{ revision }}"
-      data-cdr-url="{{ url_for('pabx.history') }}" data-export-url="{{ url_for('pabx.export_history') }}">
+      data-cdr-url="{{ url_for('pabx.history') }}" data-export-url="{{ url_for('pabx.export_history') }}"
+      data-recording-url="{{ url_for('pabx.recording', recording_id='RECORDING_ID') }}">
   {% include "_monitor_nav.html" %}
   <section class="pabx-connection" aria-labelledby="connection-heading">
     <div>
@@ -42,7 +43,7 @@
   <section aria-labelledby="overview-heading">
     <div class="pabx-section-heading">
       <h2 id="overview-heading">Visão operacional</h2>
-      {% if not http_mode %}<a href="#pabx-history">Ir para o histórico CDR ↓</a>{% endif %}
+      <a href="#pabx-history">Ir para o histórico CDR ↓</a>
     </div>
     <div class="summary-grid pabx-summary">
       {% set indicators = [
@@ -126,8 +127,6 @@
         <button type="button" class="clear-btn" id="pabx-next">Próxima</button>
       </div>
     </div>
-    {% elif http_mode %}
-    <p class="muted">O histórico CDR requer uma configuração HTTPS com escopo confirmado.</p>
     {% else %}
     <p class="muted">Histórico disponível após a confirmação do escopo CDR na configuração da integração.</p>
     {% endif %}

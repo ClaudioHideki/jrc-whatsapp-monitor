@@ -206,7 +206,7 @@ class ClientTests(unittest.TestCase):
 class MonitorTests(unittest.TestCase):
     def test_http_collection_reuses_login_and_reads_ramais_filas_and_dashboards(self):
         provider = Provider()
-        client = PABXClient(replace(CONFIG, url=HTTP_ORIGIN), provider)
+        client = PABXClient(replace(CONFIG, url=HTTP_ORIGIN, cdr_customer=""), provider)
         monitor = PABXMonitor(client)
         monitor._collect()
         monitor._collect()
@@ -419,14 +419,14 @@ class RouteTests(unittest.TestCase):
         self.assertIsNone(monitor)
         self.assertEqual(self.client.get("/api/pabx/status").json["state"], "scope_pending")
 
-    def test_save_http_only_locally_and_block_cdr(self):
+    def test_http_cdr_requires_confirmation_and_streams_audio_only_on_request(self):
         self.sign_in()
         path = "/monitoramento-pabx/configuracao"
         values = {
             "action": "save", "csrf": "a" * 64, "revision": "0", "company": PROFILE.company,
             "url": HTTP_ORIGIN, "email": PROFILE.email, "password": PROFILE.password,
             "account": PROFILE.account, "interval": "5", "enabled": "1", "scope_confirmed": "1",
-            "cdr_confirmed": "1", "cdr_customer": "55",
+            "cdr_customer": "55",
         }
         self.assertEqual(
             self.client.post(path, data=values, environ_overrides={"REMOTE_ADDR": "192.0.2.1"}).status_code, 400,
@@ -438,6 +438,49 @@ class RouteTests(unittest.TestCase):
         self.assertIn(b"Coleta por HTTP", self.client.get("/monitoramento-pabx").data)
         self.assertEqual(self.client.post("/api/pabx/cdr", json=DATES).json["error"], "cdr_disabled")
         self.assertIsNone(PABXService(self.service.store).current()[2])
+
+        local_audio = HTTP_ORIGIN + "/recordings/example.wav"
+        self.provider.cdr = [
+            {**CDR[0], "arquivo_audio": local_audio},
+            {**CDR[1], "arquivo_audio": "https://other.example.invalid/private.m4a"},
+            {**CDR[2], "arquivo_audio": HTTP_ORIGIN + "/recordings/%2e%2e/private.wav"},
+        ]
+        saved = self.client.post(path, data={**values, "revision": "1", "email": "", "password": "", "cdr_confirmed": "1"})
+        self.assertEqual(saved.status_code, 303)
+        self.assertIn(b"pabx-history-form", self.client.get("/monitoramento-pabx").data)
+
+        with patch("pabx_routes.requests.Session") as media:
+            report = self.client.post("/api/pabx/cdr", json=DATES)
+            self.assertEqual(report.status_code, 200)
+            self.assertNotIn(local_audio, report.get_data(as_text=True))
+            rows = report.json["records"]
+            recording_id = rows[0]["recording_id"]
+            self.assertTrue(recording_id)
+            self.assertIsNone(rows[1]["recording_id"])
+            self.assertIsNone(rows[2]["recording_id"])
+            media.assert_not_called()
+            self.assertEqual(self.client.get(f"/api/pabx/recordings/{'0' * 64}").status_code, 404)
+            media.assert_not_called()
+
+            upstream = requests.Response()
+            upstream.status_code = 206
+            upstream.headers.update({
+                "Content-Type": "audio/x-wav", "Accept-Ranges": "bytes",
+                "Content-Length": "2", "Content-Range": "bytes 0-1/10",
+            })
+            upstream._content = b"RI"
+            upstream._content_consumed = True
+            session = media.return_value.__enter__.return_value
+            session.request.return_value = upstream
+            audio = self.client.get(f"/api/pabx/recordings/{recording_id}", headers={"Range": "bytes=0-1"}, buffered=True)
+            self.assertEqual(audio.status_code, 206)
+            self.assertEqual(audio.get_data(), b"RI")
+            self.assertEqual(audio.headers["Content-Range"], "bytes 0-1/10")
+            self.assertEqual(session.request.call_args.args, ("GET", local_audio))
+            self.assertEqual(session.request.call_args.kwargs["headers"]["Range"], "bytes=0-1")
+            self.assertNotIn("Authorization", session.request.call_args.kwargs["headers"])
+            self.assertFalse(session.request.call_args.kwargs["allow_redirects"])
+            audio.close()
 
 
 class WhatsAppTests(unittest.TestCase):

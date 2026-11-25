@@ -212,6 +212,7 @@
   let records = [];
   let completedFilters = null;
   let pending = false;
+  let activeRecording = null;
 
   function dateInput(date) {
     const offset = date.getTimezoneOffset() * 60000;
@@ -225,6 +226,46 @@
   function historyNotice(text, error = false) {
     historyMessage.textContent = text;
     historyMessage.dataset.error = String(error);
+  }
+
+  function stopRecording() {
+    if (!activeRecording) return;
+    const player = activeRecording;
+    activeRecording = null;
+    player.pause();
+    player.removeAttribute("src");
+    player.load();
+    player.remove();
+  }
+
+  function recordingCell(record) {
+    if (!record.recording_id) return cell(record.recording ? "Referência disponível" : "");
+    const container = element("td");
+    const button = element("button", "Ouvir gravação");
+    button.type = "button";
+    button.className = "clear-btn";
+    button.addEventListener("click", () => {
+      if (activeRecording?.parentElement === container) return;
+      stopRecording();
+      const player = element("audio");
+      player.className = "pabx-recording";
+      player.controls = true;
+      player.preload = "none";
+      player.setAttribute("controlslist", "nodownload");
+      player.setAttribute("aria-label", "Gravação da chamada");
+      player.src = dashboard.dataset.recordingUrl.replace("RECORDING_ID", record.recording_id);
+      player.addEventListener("error", () => {
+        if (activeRecording === player) {
+          stopRecording();
+          historyNotice("Não foi possível tocar a gravação. Consulte o histórico novamente para atualizar a referência.", true);
+        }
+      });
+      activeRecording = player;
+      container.append(player);
+      player.play().catch(() => {});
+    });
+    container.append(button);
+    return container;
   }
 
   function chart(id, field) {
@@ -247,13 +288,14 @@
   }
 
   function renderHistory() {
+    stopRecording();
     const pages = Math.ceil(records.length / pageSize);
     historyResults.hidden = !pages;
     const startIndex = (historyPage - 1) * pageSize;
     const tableRows = records.slice(startIndex, startIndex + pageSize).map((row) => {
       const tr = element("tr");
       const id = row.id_occurrences > 1 ? `${row.uniqueid} (${row.id_occurrences} no período)` : row.uniqueid;
-      tr.append(...[row.date, id, row.source, row.destination, row.status, row.direction, row.recording ? "Referência disponível" : ""].map(cell));
+      tr.append(...[row.date, id, row.source, row.destination, row.status, row.direction].map(cell), recordingCell(row));
       return tr;
     });
     byId("pabx-records").replaceChildren(...tableRows);
@@ -288,6 +330,7 @@
   }
 
   historyForm.addEventListener("change", (event) => {
+    stopRecording();
     if (event.target === start || event.target === end) {
       options(status, [], "Todas");
       options(direction, [], "Todas");
@@ -301,6 +344,7 @@
   historyForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (pending) return;
+    stopRecording();
     const filters = Object.fromEntries(new FormData(historyForm));
     completedFilters = null;
     historyResults.hidden = true;

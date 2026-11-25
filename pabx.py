@@ -201,8 +201,11 @@ class PABXClient:
             return self._token
 
     def query(self, method, resource, *, params=None, payload=None, deadline=None):
-        if self.config.uses_http and (method != "GET" or resource not in self.HTTP_READ_RESOURCES):
-            raise PABXError("http_read_only")
+        if self.config.uses_http:
+            allowed_get = method == "GET" and resource in self.HTTP_READ_RESOURCES
+            allowed_cdr = method == "POST" and resource == "relatorio-cdr/search" and self.config.cdr_customer
+            if not (allowed_get or allowed_cdr):
+                raise PABXError("http_read_only")
         path = "/api/v1/admin/" + resource
         token = self._access_token(deadline=deadline)
         response = self._request(method, path, token=token[0], params=params, payload=payload, deadline=deadline)

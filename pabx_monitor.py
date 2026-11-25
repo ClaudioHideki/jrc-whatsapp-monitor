@@ -1,8 +1,12 @@
+import hmac
 import re
+import secrets
 import threading
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
+from urllib.parse import unquote, urlsplit
 
 from pabx import PABXError, nonnegative_int, object_rows, pages
 
@@ -257,7 +261,26 @@ def cdr_value(value):
     return text if re.fullmatch(r"[-\w .:/+]+", text) and "://" not in text else ""
 
 
-def cdr_data(client, start, end, stop):
+def recording_reference(value, origin):
+    if not isinstance(value, str) or not value or len(value) > 2048:
+        return None
+    if any(ord(char) < 32 or char in "\\ " for char in value):
+        return None
+    try:
+        address = urlsplit(value)
+    except ValueError:
+        return None
+    if address.fragment or f"{address.scheme}://{address.netloc}" != origin:
+        return None
+    path = unquote(address.path)
+    if any(ord(char) < 32 or char in "\\%" for char in path) or "//" in path:
+        return None
+    if set(path.split("/")) & {".", ".."} or PurePosixPath(path).suffix.lower() not in {".wav", ".mp3", ".ogg", ".m4a"}:
+        return None
+    return value
+
+
+def cdr_data(client, start, end, stop, recording_key):
     payload = {
         "datainicial": start.isoformat(), "datafinal": end.isoformat(),
         "horainicial": "00:00", "horafinal": "23:59", "paginacao": 10,
@@ -272,8 +295,15 @@ def cdr_data(client, start, end, stop):
 
     rows = pages(query, limit=100)
     check_scope(rows, "cliente_id", client.config.cdr_customer)
-    entries = [
-        {
+    entries = []
+    recordings = {}
+    for row in rows:
+        reference = recording_reference(row.get("arquivo_audio"), client.config.url)
+        recording_id = None
+        if reference:
+            recording_id = hmac.digest(recording_key, reference.encode(), "sha256").hex()
+            recordings[recording_id] = reference
+        entries.append({
             "uniqueid": cdr_value(row.get("uniqueid")),
             "date": cdr_value(row.get("calldate") or row.get("start")),
             "source": hide_number(row.get("origem")),
@@ -281,13 +311,12 @@ def cdr_data(client, start, end, stop):
             "status": cdr_value(row.get("status")),
             "direction": cdr_value(row.get("direcao")),
             "recording": bool(row.get("arquivo_audio")),
-        }
-        for row in rows
-    ]
+            "recording_id": recording_id,
+        })
     ids = Counter(row["uniqueid"] for row in entries if row["uniqueid"])
     for row in entries:
         row["id_occurrences"] = ids.get(row["uniqueid"]) or None
-    return entries
+    return entries, recordings
 
 
 class PABXMonitor:
@@ -303,6 +332,7 @@ class PABXMonitor:
         self._success_clock = None
         self._error = None
         self._history_cache = None
+        self._recording_key = secrets.token_bytes(32)
 
     def _collect(self):
         with self._state_lock:
@@ -359,7 +389,7 @@ class PABXMonitor:
             }
 
     def history(self, start, end):
-        if self.client.config.uses_http or not self.client.config.cdr_customer:
+        if not self.client.config.cdr_customer:
             raise PABXError("cdr_disabled")
         if not self._history_lock.acquire(blocking=False):
             raise PABXError("history_busy")
@@ -368,11 +398,17 @@ class PABXMonitor:
             cached = self._history_cache
             if cached and cached[0] == period and time.monotonic() < cached[1]:
                 return cached[2]
-            rows = cdr_data(self.client, start, end, self._stop)
-            self._history_cache = (period, time.monotonic() + 60, rows)
+            rows, recordings = cdr_data(self.client, start, end, self._stop, self._recording_key)
+            self._history_cache = (period, time.monotonic() + 60, rows, recordings)
             return rows
         except PABXError:
             self._history_cache = None
             raise
         finally:
             self._history_lock.release()
+
+    def recording_url(self, recording_id):
+        cached = self._history_cache
+        if self._stop.is_set() or cached is None or recording_id not in cached[3]:
+            raise PABXError("recording_missing")
+        return cached[3][recording_id]

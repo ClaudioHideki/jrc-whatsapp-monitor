@@ -129,10 +129,11 @@ em uma fila são exibidos em colunas distintas.
 
 O CDR apresenta uma linha por registro, inclusive quando o `uniqueid` se
 repete. Gráficos, filtros e exportação CSV usam essa unidade de contagem.
-Origem e destino são mascarados, e gravações aparecem como indicação de
-referência. A homologação precisa confirmar a consolidação de chamadas,
-a semântica das durações, o fuso do relatório, a validade e renovação do
-token e o acesso a áudio no ambiente do fornecedor. A consulta aceita períodos
+Origem e destino são mascarados. As gravações elegíveis da mesma origem
+podem ser ouvidas no painel. O áudio é solicitado por GET somente ao clicar
+em **Ouvir gravação**. A URL original fica no servidor. A homologação precisa
+confirmar a consolidação de chamadas, a semântica das durações, o fuso do
+relatório e a validade e renovação do token. A consulta aceita períodos
 de até 31 dias e até 100 páginas. Se o limite for excedido, reduza o período.
 
 ### Coleta local de ramais e filas via HTTP
@@ -144,11 +145,12 @@ for aceito para o ambiente. O formulário aceita essa origem em uma sessão
 local. Guarde a origem na configuração persistente do servidor local para
 retomar a coleta após reiniciar.
 
-Nesse modo, a única operação POST é o login para obter ou renovar o token.
-A coleta consulta por GET as listas e os dashboards de ramais e filas.
+Nesse modo, a coleta automática usa POST para obter ou renovar o token e
+GET para as listas e os dashboards de ramais e filas.
 O dashboard informa o total de chamadas ativas e identifica os ramais em
 ligação pelo campo `extensionsInCall` da resposta do escopo autorizado.
-O histórico CDR usa o modo HTTPS.
+Com o cliente CDR confirmado, **Consultar** e **Exportar CSV** usam o POST
+de pesquisa do CDR. O servidor valida o `cliente_id` em todas as páginas.
 
 ### Testes locais
 

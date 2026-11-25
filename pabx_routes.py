@@ -2,10 +2,12 @@ import csv
 import io
 import re
 import secrets
+from contextlib import ExitStack
 from dataclasses import replace
 from datetime import date
 from functools import wraps
 
+import requests
 from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, session, url_for
 
 from pabx import PABXError
@@ -31,9 +33,13 @@ ERROR_STATUS = {
     "http_origin": 400,
     "http_read_only": 403,
     "csrf": 403,
+    "recording_missing": 404,
+    "recording_range": 416,
     "timeout": 504,
     "unavailable": 503,
 }
+
+RECORDING_TYPES = frozenset(("audio/wav", "audio/x-wav", "audio/wave", "audio/mpeg", "audio/ogg", "audio/mp4"))
 
 ADMIN_MESSAGES = {
     "storage_setup": "Configure a chave de criptografia do PABX e o caminho do banco no servidor.",
@@ -94,6 +100,60 @@ def cdr_csv(rows):
         "\ufeff" + output.getvalue(), content_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="pabx-cdr.csv"'},
     )
+
+
+def stream_recording(url, config):
+    headers = {"Accept-Encoding": "identity"}
+    requested_range = request.headers.get("Range")
+    if requested_range is not None:
+        if not re.fullmatch(r"bytes=(?:[0-9]{1,16}-[0-9]{0,16}|-[0-9]{1,16})", requested_range):
+            raise PABXError("recording_range")
+        headers["Range"] = requested_range
+
+    with ExitStack() as stack:
+        client = stack.enter_context(requests.Session())
+        client.trust_env = False
+        try:
+            upstream = stack.enter_context(client.request(
+                request.method, url, headers=headers, stream=True, allow_redirects=False,
+                timeout=config.timeout, verify=config.verify,
+            ))
+        except requests.Timeout:
+            raise PABXError("timeout") from None
+        except requests.RequestException:
+            raise PABXError("unavailable") from None
+
+        media = upstream.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if upstream.status_code == 416:
+            raise PABXError("recording_range")
+        if upstream.status_code not in (200, 206) or media not in RECORDING_TYPES:
+            raise PABXError("recording_missing")
+
+        response_headers = {
+            "X-Content-Type-Options": "nosniff",
+            "Cross-Origin-Resource-Policy": "same-origin",
+        }
+        if upstream.headers.get("Accept-Ranges") == "bytes":
+            response_headers["Accept-Ranges"] = "bytes"
+        if upstream.status_code == 206:
+            content_range = upstream.headers.get("Content-Range", "")
+            if not re.fullmatch(r"bytes [0-9]+-[0-9]+/(?:[0-9]+|\*)", content_range):
+                raise PABXError("recording_missing")
+            response_headers["Content-Range"] = content_range
+        length = upstream.headers.get("Content-Length", "")
+        if re.fullmatch(r"[0-9]{1,17}", length) and upstream.headers.get("Content-Encoding", "identity") == "identity":
+            response_headers["Content-Length"] = length
+
+        def chunks():
+            try:
+                yield from upstream.iter_content(chunk_size=64 * 1024)
+            except requests.RequestException:
+                # A closed upstream connection ends the stream without logging its URL.
+                return
+
+        response = Response(chunks(), status=upstream.status_code, content_type=media, headers=response_headers)
+        response.call_on_close(stack.pop_all().close)
+        return response
 
 
 def register_pabx(app, login_required, login_user, login_password):
@@ -242,5 +302,17 @@ def register_pabx(app, login_required, login_user, login_password):
             statuses=sorted({row["status"] for row in rows if row["status"]}, key=str.casefold),
             directions=sorted({row["direction"] for row in rows if row["direction"]}, key=str.casefold),
         )
+
+    @routes.get("/api/pabx/recordings/<recording_id>")
+    @api_auth
+    def recording(recording_id):
+        _, _, monitor = service.current() if service else (None, 0, None)
+        if monitor is None or not re.fullmatch(r"[a-f0-9]{64}", recording_id):
+            raise PABXError("recording_missing")
+        result = stream_recording(monitor.recording_url(recording_id), monitor.client.config)
+        if service.current()[2] is not monitor:
+            result.close()
+            raise PABXError("config_changed")
+        return result
 
     app.register_blueprint(routes)

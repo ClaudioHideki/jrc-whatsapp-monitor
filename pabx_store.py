@@ -41,7 +41,7 @@ class PABXProfile:
             password = saved.password
         account = form.get("account", "").strip()
         cdr_customer = form.get("cdr_customer", "").strip()
-        cdr_confirmed = url.startswith("https://") and form.get("cdr_confirmed") == "1"
+        cdr_confirmed = form.get("cdr_confirmed") == "1"
         if (
             not all((company, email, password, account))
             or len(company) > 150 or len(email) > 254 or len(password) > 1024
@@ -169,7 +169,7 @@ class PABXService:
         return PABXConfig(
             profile.url, profile.email, profile.password, profile.account,
             profile.interval, self.timeout, self.verify,
-            profile.cdr_customer if profile.cdr_confirmed and profile.url.startswith("https://") else "",
+            profile.cdr_customer if profile.cdr_confirmed else "",
         )
 
     def transport_allowed(self, profile):
