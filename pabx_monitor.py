@@ -4,6 +4,7 @@ import secrets
 import threading
 import time
 from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from urllib.parse import unquote, urlsplit
@@ -48,6 +49,16 @@ def extension_info(item):
         "extension": label(item.get("alias")) or (match[1] if match else key(item.get("name"))),
         "name": match[2] if match else alias,
     }
+
+
+def recording_extensions(people):
+    found = defaultdict(set)
+    for identifier, person in people.items():
+        extension = person["extension"]
+        if re.fullmatch(r"[0-9]{1,15}", extension):
+            found[identifier].add(extension)
+            found[extension].add(extension)
+    return {identifier: next(iter(aliases)) for identifier, aliases in found.items() if len(aliases) == 1}
 
 
 def extension_state(item, value):
@@ -230,7 +241,7 @@ def operational_data(client, stop):
     counts = Counter(person["status"] for person in ramais)
     known_state = not ramais or counts["unknown"] < len(ramais)
     known_registration = not ramais or any(person["registered"] is not None for person in ramais)
-    return {
+    data = {
         "indicators": {
             "total": len(ramais),
             "queues": len(queue_results),
@@ -246,6 +257,7 @@ def operational_data(client, stop):
         "extensions": ramais,
         "queues": sorted(queue_results, key=lambda queue: queue["name"].casefold()),
     }
+    return data, recording_extensions(people)
 
 
 def hide_number(value):
@@ -280,7 +292,39 @@ def recording_reference(value, origin):
     return value
 
 
-def cdr_data(client, start, end, stop, recording_key):
+@dataclass(frozen=True)
+class Recording:
+    url: str = field(repr=False)
+    filename_base: str
+
+
+def recording_filename(row, extensions):
+    stamp = "data-hora-nao-informadas"
+    for value in (row.get("calldate"), row.get("start")):
+        text = label(value)
+        if not re.match(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}", text):
+            continue
+        try:
+            stamp = datetime.fromisoformat(text).strftime("%Y-%m-%d_%H-%M-%S")
+        except ValueError:
+            continue
+        break
+
+    primary = ("canal2", "destino") if label(row.get("direcao")).casefold() == "entrada" else ("canal", "origem")
+    secondary = ("canal", "origem") if primary[0] == "canal2" else ("canal2", "destino")
+    ramal = "nao-identificado"
+    for name in (*primary, *secondary):
+        value = label(row.get(name))
+        identifier = key(value)
+        match = re.fullmatch(r"(?:PJSIP|SIP)/(.+)-[a-f0-9]{8}", value, re.I)
+        confirmed = extensions.get(identifier) or (extensions.get(match[1]) if match else None)
+        if confirmed:
+            ramal = confirmed
+            break
+    return f"gravacao-{stamp}_ramal-{ramal}"
+
+
+def cdr_data(client, start, end, stop, recording_key, extensions):
     payload = {
         "datainicial": start.isoformat(), "datafinal": end.isoformat(),
         "horainicial": "00:00", "horafinal": "23:59", "paginacao": 10,
@@ -302,7 +346,8 @@ def cdr_data(client, start, end, stop, recording_key):
         recording_id = None
         if reference:
             recording_id = hmac.digest(recording_key, reference.encode(), "sha256").hex()
-            recordings[recording_id] = reference
+            if recording_id not in recordings:
+                recordings[recording_id] = Recording(reference, recording_filename(row, extensions))
         entries.append({
             "uniqueid": cdr_value(row.get("uniqueid")),
             "date": cdr_value(row.get("calldate") or row.get("start")),
@@ -328,6 +373,7 @@ class PABXMonitor:
         self._stop = threading.Event()
         self._collecting = False
         self._data = None
+        self._recording_extensions = {}
         self._last_success = None
         self._success_clock = None
         self._error = None
@@ -338,15 +384,17 @@ class PABXMonitor:
         with self._state_lock:
             self._collecting = True
         try:
-            data = operational_data(self.client, self._stop)
+            data, extensions = operational_data(self.client, self._stop)
         except PABXError as error:
             with self._state_lock:
                 self._error = error.code
                 if error.code in ("forbidden", "scope_mismatch", "credentials"):
                     self._data = None
+                    self._recording_extensions = {}
         else:
             with self._state_lock:
                 self._data = data
+                self._recording_extensions = extensions
                 self._last_success = datetime.now(timezone.utc).isoformat()
                 self._success_clock = time.monotonic()
                 self._error = None
@@ -398,7 +446,9 @@ class PABXMonitor:
             cached = self._history_cache
             if cached and cached[0] == period and time.monotonic() < cached[1]:
                 return cached[2]
-            rows, recordings = cdr_data(self.client, start, end, self._stop, self._recording_key)
+            with self._state_lock:
+                extensions = self._recording_extensions
+            rows, recordings = cdr_data(self.client, start, end, self._stop, self._recording_key, extensions)
             self._history_cache = (period, time.monotonic() + 60, rows, recordings)
             return rows
         except PABXError:
@@ -408,9 +458,9 @@ class PABXMonitor:
             self._history_lock.release()
 
     def recording_url(self, recording_id):
-        return self.recording_urls([recording_id])[0]
+        return self.recording_entries([recording_id])[0].url
 
-    def recording_urls(self, recording_ids):
+    def recording_entries(self, recording_ids):
         cached = self._history_cache
         if self._stop.is_set() or cached is None or any(recording_id not in cached[3] for recording_id in recording_ids):
             raise PABXError("recording_missing")

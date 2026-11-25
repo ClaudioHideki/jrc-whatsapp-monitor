@@ -5,6 +5,7 @@ import re
 import secrets
 import subprocess
 import threading
+from collections import Counter
 from contextlib import ExitStack, closing
 from dataclasses import replace
 from datetime import date
@@ -239,25 +240,30 @@ class ZipOutput:
         return chunks
 
 
-def recording_archive(urls, config, is_current):
+def recording_archive(recordings, config, is_current):
     output = ZipOutput()
     warnings = []
+    names = Counter()
     with ZipFile(output, "w") as archive:
-        for index, url in enumerate(urls, 1):
+        for index, recording in enumerate(recordings, 1):
             if not is_current():
                 warnings.append("A configuração mudou. Os arquivos restantes não foram incluídos.")
                 break
 
             filename = None
             try:
-                with closing(stream_recording(url, config, strict=True)) as audio:
+                with closing(stream_recording(recording.url, config, strict=True)) as audio:
                     if audio.status_code != 200:
                         raise PABXError("recording_missing")
                     chunks = iter(audio.response)
                     first = next(chunks, None)
                     if not first:
                         raise PABXError("recording_missing")
-                    filename = f"gravacao-{index:03d}.{RECORDING_EXTENSIONS[audio.mimetype]}"
+                    extension = RECORDING_EXTENSIONS[audio.mimetype]
+                    filename = f"{recording.filename_base}.{extension}"
+                    names[filename] += 1
+                    if names[filename] > 1:
+                        filename = f"{recording.filename_base}_{names[filename]}.{extension}"
                     with archive.open(filename, "w", force_zip64=True) as entry:
                         for chunk in chain((first,), chunks):
                             entry.write(chunk)
@@ -458,11 +464,11 @@ def register_pabx(app, login_required, login_user, login_password):
         if not 1 <= len(ids) <= 1000 or any(not re.fullmatch(r"[a-f0-9]{64}", value) for value in ids):
             raise PABXError("recording_selection")
 
-        urls = monitor.recording_urls(dict.fromkeys(ids))
+        recordings = monitor.recording_entries(dict.fromkeys(ids))
         if service.current()[2] is not monitor:
             raise PABXError("config_changed")
         return Response(
-            recording_archive(urls, monitor.client.config, lambda: service.current()[2] is monitor),
+            recording_archive(recordings, monitor.client.config, lambda: service.current()[2] is monitor),
             content_type="application/zip",
             headers={"Content-Disposition": 'attachment; filename="gravacoes-pabx.zip"'},
         )

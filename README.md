@@ -144,6 +144,9 @@ em todas as páginas. O botão solicita os arquivos por GET somente no clique, e
 o servidor envia o ZIP em fluxo contínuo. Referências iguais entram uma única
 vez. Se um áudio falhar durante a geração, o ZIP inclui `resultado.txt` com
 as gravações afetadas.
+Os nomes usam a data e a hora do CDR e o ramal identificado no cadastro da
+conta, como `gravacao-2026-11-05_09-00-00_ramal-101.mp3`. Quando o ramal
+não pode ser identificado, o nome termina em `ramal-nao-identificado`.
 
 ### Coleta local de ramais e filas via HTTP
 

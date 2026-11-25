@@ -18,7 +18,7 @@ from cryptography.fernet import Fernet
 from flask import Flask, session
 
 from pabx import PABXClient, PABXConfig, PABXError, pabx_origin, pages
-from pabx_monitor import PABXMonitor, extension_state
+from pabx_monitor import PABXMonitor, extension_state, recording_filename
 from pabx_routes import register_pabx
 from pabx_store import PABXProfile, PABXService, PABXStore
 
@@ -206,6 +206,16 @@ class ClientTests(unittest.TestCase):
 
 
 class MonitorTests(unittest.TestCase):
+    def test_recording_filename_uses_cdr_time_and_only_registered_extension_identifiers(self):
+        scoped = {"demo-101": "101", "demo-102": "102", "101": "101", "102": "102"}
+        outbound = {
+            "calldate": "2026-11-05", "start": "2026-11-05T21:00:01-03:00", "direcao": "saida",
+            "canal": "SIP/demo-102-000000ff", "destino": "101",
+        }
+        self.assertEqual(recording_filename(outbound, scoped), "gravacao-2026-11-05_21-00-01_ramal-102")
+        unknown = {"calldate": "inválida", "origem": "00000123456", "destino": "00000654321"}
+        self.assertEqual(recording_filename(unknown, scoped), "gravacao-data-hora-nao-informadas_ramal-nao-identificado")
+
     def test_http_collection_reuses_login_and_reads_ramais_filas_and_dashboards(self):
         provider = Provider()
         client = PABXClient(replace(CONFIG, url=HTTP_ORIGIN, cdr_customer=""), provider)
@@ -426,14 +436,20 @@ class RouteTests(unittest.TestCase):
             media.assert_not_called()
 
     def test_recording_zip_requires_click_selection_and_keeps_audio_scoped(self):
-        self.service.save(PROFILE, 0)
         self.sign_in()
         first_url, second_url = (
             f"{PROFILE.url}/recordings/{name}.mp3" for name in ("first", "second")
         )
-        self.provider.cdr = [{**CDR[0], "arquivo_audio": first_url}, {**CDR[1], "arquivo_audio": second_url}]
+        inbound = {**CDR[0], "destino": "00000123456", "canal2": "PJSIP/demo-101-0000000a"}
+        self.provider.cdr = [{**inbound, "arquivo_audio": first_url}, {**inbound, "arquivo_audio": second_url}]
+        monitor = PABXMonitor(PABXClient(CONFIG, self.provider))
+        monitor._collect()
+        filename = "gravacao-2026-11-05_09-00-00_ramal-101.mp3"
+        second_filename = "gravacao-2026-11-05_09-00-00_ramal-101_2.mp3"
         zip_url = "/api/pabx/recordings/zip"
-        with patch("pabx_routes.requests.Session") as media:
+        with patch.object(self.service, "current", return_value=(PROFILE, 1, monitor)), patch(
+            "pabx_routes.requests.Session",
+        ) as media:
             page = self.client.get("/monitoramento-pabx")
             self.assertIn(b"pabx-recordings-zip", page.data)
             history = self.client.post("/api/pabx/cdr", json=DATES)
@@ -466,9 +482,9 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(archive.headers["Content-Disposition"], 'attachment; filename="gravacoes-pabx.zip"')
             self.assertEqual(archive.headers["Cache-Control"], "no-store")
             with ZipFile(io.BytesIO(archive.data)) as tracks:
-                self.assertEqual(tracks.namelist(), ["gravacao-001.mp3", "gravacao-002.mp3"])
-                self.assertEqual(tracks.read("gravacao-001.mp3"), b"primeiro")
-                self.assertEqual(tracks.read("gravacao-002.mp3"), b"segundo")
+                self.assertEqual(tracks.namelist(), [filename, second_filename])
+                self.assertEqual(tracks.read(filename), b"primeiro")
+                self.assertEqual(tracks.read(second_filename), b"segundo")
             self.assertEqual([call.args[1] for call in upstream.call_args_list], [first_url, second_url])
             archive.close()
 
@@ -480,7 +496,7 @@ class RouteTests(unittest.TestCase):
             ]
             partial = self.client.post(zip_url, data=form, buffered=True)
             with ZipFile(io.BytesIO(partial.data)) as tracks:
-                self.assertEqual(tracks.namelist(), ["gravacao-001.mp3", "resultado.txt"])
+                self.assertEqual(tracks.namelist(), [filename, "resultado.txt"])
                 self.assertIn("A gravação 2 não pôde", tracks.read("resultado.txt").decode())
             partial.close()
 
