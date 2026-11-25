@@ -77,6 +77,9 @@ class Provider:
         self.directory = EXTENSIONS
         self.failure = None
         self.live_total = 1
+        self.live_filters = {"accountcode": "demo"}
+        self.live_states = {"PJSIP/demo-101": "ringing", "demo-102": {"state": "free"}}
+        self.extensions_in_call = []
         self.collected = threading.Event()
 
     def __call__(self, method, url, **args):
@@ -97,9 +100,9 @@ class Provider:
             return response(200, pagination([QUEUE], params["page"]))
         if resource == "dashboard-extension":
             return response(200, {
-                "filters": {"accountcode": "demo"}, "summary": {"totalCalls": self.live_total},
+                "filters": self.live_filters, "summary": {"totalCalls": self.live_total},
                 "extensions": {"total": 2, "items": EXTENSIONS},
-                "statusMap": {"PJSIP/demo-101": "ringing", "demo-102": {"state": "free"}},
+                "statusMap": self.live_states, "extensionsInCall": self.extensions_in_call,
             })
         if resource == "dashboard-queue":
             self.collected.set()
@@ -232,6 +235,37 @@ class MonitorTests(unittest.TestCase):
         for reported, expected in (("NOT_INUSE", "available"), ("INUSE", "busy"), ("RINGING", "ringing")):
             with self.subTest(reported=reported):
                 self.assertEqual(extension_state({"registered": True}, reported), (expected, True))
+
+    def test_calls_are_scoped_and_busy_is_not_call_membership(self):
+        provider = Provider()
+        provider.live_total = 2
+        provider.live_states = {"demo-101": "INUSE", "demo-102": "BUSY"}
+        provider.extensions_in_call = [
+            "PJSIP/demo-101",
+            {"ramal": "101", "accountcode": "demo"},
+            {"ramal": "102", "accountcode": "outside"},
+            "unknown-provider-id",
+        ]
+        monitor = PABXMonitor(PABXClient(replace(CONFIG, url=HTTP_ORIGIN), provider))
+        monitor._collect()
+        data = monitor.snapshot()["data"]
+        self.assertEqual(data["indicators"]["active_calls"], 2)
+        self.assertEqual(data["indicators"]["extensions_in_call"], 1)
+        self.assertEqual(data["indicators"]["busy"], 2)
+        self.assertEqual([row["in_call"] for row in data["extensions"]], [True, False])
+        self.assertTrue(data["queues"][0]["members"][0]["in_call"])
+
+        provider.extensions_in_call = ["unknown-provider-id"]
+        monitor._collect()
+        data = monitor.snapshot()["data"]
+        self.assertEqual(data["indicators"]["active_calls"], 2)
+        self.assertIsNone(data["indicators"]["extensions_in_call"])
+
+        provider.live_filters = {}
+        monitor._collect()
+        data = monitor.snapshot()["data"]
+        self.assertIsNone(data["indicators"]["active_calls"])
+        self.assertIsNone(data["indicators"]["extensions_in_call"])
 
     def test_operational_status_scope_and_last_valid_collection(self):
         provider = Provider()

@@ -46,7 +46,8 @@
     </div>
     <div class="summary-grid pabx-summary">
       {% set indicators = [
-        ('total', 'Ramais'), ('queues', 'Filas') if http_mode else ('active_calls', 'Chamadas ativas'),
+        ('total', 'Ramais'), ('queues', 'Filas'),
+        ('active_calls', 'Chamadas ativas'), ('extensions_in_call', 'Ramais em ligação'),
         ('available', 'Livres'), ('busy', 'Ocupados'),
         ('ringing', 'Tocando'), ('registered', 'Registrados'),
         ('unregistered', 'Não registrados'), ('unknown', 'Estado indefinido')
@@ -70,6 +71,7 @@
           <option value="available">Livre</option>
           <option value="busy">Ocupado</option>
           <option value="ringing">Tocando</option>
+          <option value="in_call">Em ligação</option>
           <option value="registered">Registrado</option>
           <option value="unregistered">Não registrado</option>
           <option value="unknown">Estado indefinido</option>

@@ -6,7 +6,7 @@
   const formatCount = new Intl.NumberFormat("pt-BR");
   const formatTime = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "medium" });
   const stateLabels = {
-    available: "Livre", busy: "Ocupado", ringing: "Tocando",
+    available: "Livre", busy: "Ocupado", ringing: "Tocando", in_call: "Em ligação",
     registered: "Registrado", unregistered: "Não registrado", unknown: "Estado indefinido",
   };
   const messages = {
@@ -74,7 +74,8 @@
     const state = stateFilter.value;
     const extensions = snapshot?.data?.extensions;
     const rows = (extensions || []).filter((row) => {
-      const matchesState = state === "registered" ? row.registered === true : !state || row.status === state;
+      const matchesState = state === "in_call" ? row.in_call === true :
+        state === "registered" ? row.registered === true : !state || row.status === state;
       return matchesState &&
         (!queueFilter.value || row.queues.some((queue) => queue.code === queueFilter.value)) &&
         (!term || `${row.extension} ${row.name}`.toLocaleLowerCase("pt-BR").includes(term));
@@ -84,15 +85,23 @@
       const tr = element("tr");
       const stateCell = element("td");
       stateCell.append(statusBadge(row.status));
+      if (row.in_call) stateCell.append(" · ", statusBadge("in_call"));
       const registration = row.registered == null ? "" : row.registered ? "Registrado" : "Não registrado";
       const queues = row.queues.map((queue) => `${queue.name} (${pauseLabel(queue.paused)})`).join(", ");
       tr.append(cell(row.extension), cell(row.name), stateCell, cell(registration), cell(queues));
       fragment.append(tr);
     }
     byId("pabx-extensions").replaceChildren(fragment);
-    byId("pabx-extension-count").textContent = !extensions ? "Aguardando dados de ramais." :
-      rows.length ? `${formatCount.format(rows.length)} ramais exibidos.` :
-        "Nenhum ramal encontrado para os filtros selecionados.";
+    let countMessage = "Aguardando dados de ramais.";
+    if (extensions) {
+      if (rows.length) countMessage = `${formatCount.format(rows.length)} ramais exibidos.`;
+      else if (state === "in_call" && snapshot.data.indicators.extensions_in_call == null) {
+        countMessage = "A API ainda não informou os ramais em ligação.";
+      } else if (state === "in_call" && !term && !queueFilter.value) {
+        countMessage = "Nenhum ramal em ligação identificado nesta coleta.";
+      } else countMessage = "Nenhum ramal encontrado para os filtros selecionados.";
+    }
+    byId("pabx-extension-count").textContent = countMessage;
   }
 
   function renderQueues(queues) {
@@ -121,7 +130,9 @@
         for (const member of queue.members) {
           const identity = [member.extension, member.name].filter(Boolean).join(" · ") || "Ramal não identificado";
           const row = element("li", `${identity} · `);
-          row.append(statusBadge(member.status), ` · ${pauseLabel(member.paused)}`);
+          row.append(statusBadge(member.status));
+          if (member.in_call) row.append(" · ", statusBadge("in_call"));
+          row.append(` · ${pauseLabel(member.paused)}`);
           list.append(row);
         }
         details.append(list);

@@ -90,6 +90,23 @@ def scoped_dashboard(data, account):
     return data
 
 
+def call_extension_ids(entries, account):
+    if not isinstance(entries, list):
+        return None
+    identifiers = set()
+    for entry in entries:
+        if isinstance(entry, dict):
+            scope = entry.get("accountcode")
+            if scope is not None and str(scope).strip() != account:
+                continue
+            entry = entry.get("extension") or entry.get("name") or entry.get("ramal")
+        identifier = key(entry)
+        if not identifier:
+            return None
+        identifiers.add(identifier)
+    return identifiers
+
+
 def operational_status(query, account):
     live = scoped_dashboard(query("dashboard-extension"), account)
     queue_live = scoped_dashboard(query("dashboard-queue"), account)
@@ -114,7 +131,11 @@ def operational_status(query, account):
     else:
         states = {}
     states.pop("", None)
-    return live_items, states, live_queue_codes, nonnegative_int(summary.get("totalCalls"))
+    filters = live.get("filters")
+    call_scope_confirmed = isinstance(filters, dict) and str(filters.get("accountcode")).strip() == account
+    active_calls = nonnegative_int(summary.get("totalCalls")) if call_scope_confirmed else None
+    in_call = call_extension_ids(live.get("extensionsInCall"), account) if call_scope_confirmed else None
+    return live_items, states, live_queue_codes, active_calls, in_call
 
 
 def operational_data(client, stop):
@@ -132,7 +153,7 @@ def operational_data(client, stop):
 
     directory = check_scope(pages(lambda page: query("ramais", page).get("ramais"), limit=50), "accountcode", account)
     queues = check_scope(pages(lambda page: query("filas", page), limit=50), "accountcode", account)
-    live_items, states, live_queue_codes, active_calls = operational_status(query, account)
+    live_items, states, live_queue_codes, active_calls, in_call = operational_status(query, account)
 
     people = {}
     for item in directory:
@@ -147,6 +168,18 @@ def operational_data(client, stop):
         person = people.setdefault(identifier, extension_info(item))
         value = states.get(identifier, states.get(person["extension"]))
         person["status"], person["registered"] = extension_state(item, value)
+
+    aliases = Counter(person["extension"] for person in people.values())
+    recognized_in_call = set()
+    if in_call is not None:
+        for identifier, person in people.items():
+            alias = person["extension"]
+            if identifier in in_call or (alias in in_call and aliases[alias] == 1 and alias not in people):
+                recognized_in_call.add(identifier)
+        if in_call and not recognized_in_call:
+            in_call = None
+    for identifier, person in people.items():
+        person["in_call"] = None if in_call is None else identifier in recognized_in_call
 
     memberships = defaultdict(list)
     queue_results = []
@@ -166,7 +199,10 @@ def operational_data(client, stop):
             identifier = key(ramal.get("name") or member.get("interface"))
             person = people.get(identifier)
             if not person:
-                members.append({"extension": "", "name": "", "status": "unknown", "paused": flag(member.get("paused"))})
+                members.append({
+                    "extension": "", "name": "", "status": "unknown",
+                    "in_call": None, "paused": flag(member.get("paused")),
+                })
                 continue
             paused = flag(member.get("paused"))
             memberships[identifier].append({"code": code, "name": name, "paused": paused})
@@ -174,6 +210,7 @@ def operational_data(client, stop):
                 "extension": person["extension"],
                 "name": person["name"] or label(member.get("membername")),
                 "status": person["status"],
+                "in_call": person["in_call"],
                 "paused": paused,
             })
         queue_results.append({
@@ -194,6 +231,7 @@ def operational_data(client, stop):
             "total": len(ramais),
             "queues": len(queue_results),
             "active_calls": active_calls,
+            "extensions_in_call": len(recognized_in_call) if in_call is not None else None,
             "available": counts["available"] if known_state else None,
             "busy": counts["busy"] if known_state else None,
             "ringing": counts["ringing"] if known_state else None,

@@ -146,6 +146,8 @@ retomar a coleta após reiniciar.
 
 Nesse modo, a única operação POST é o login para obter ou renovar o token.
 A coleta consulta por GET as listas e os dashboards de ramais e filas.
+O dashboard informa o total de chamadas ativas e identifica os ramais em
+ligação pelo campo `extensionsInCall` da resposta do escopo autorizado.
 O histórico CDR usa o modo HTTPS.
 
 ### Testes locais
