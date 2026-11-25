@@ -16,7 +16,7 @@ from cryptography.fernet import Fernet
 from flask import Flask, session
 
 from pabx import PABXClient, PABXConfig, PABXError, pabx_origin, pages
-from pabx_monitor import PABXMonitor
+from pabx_monitor import PABXMonitor, extension_state
 from pabx_routes import register_pabx
 from pabx_store import PABXProfile, PABXService, PABXStore
 
@@ -201,7 +201,7 @@ class ClientTests(unittest.TestCase):
 
 
 class MonitorTests(unittest.TestCase):
-    def test_http_collection_reuses_login_and_only_reads_ramais_and_filas(self):
+    def test_http_collection_reuses_login_and_reads_ramais_filas_and_dashboards(self):
         provider = Provider()
         client = PABXClient(replace(CONFIG, url=HTTP_ORIGIN), provider)
         monitor = PABXMonitor(client)
@@ -210,18 +210,28 @@ class MonitorTests(unittest.TestCase):
         indicators = monitor.snapshot()["data"]["indicators"]
         self.assertEqual(indicators["total"], 2)
         self.assertEqual(indicators["queues"], 1)
-        self.assertIsNone(indicators["active_calls"])
-        self.assertIsNone(indicators["registered"])
+        self.assertEqual(indicators["available"], 1)
+        self.assertEqual(indicators["ringing"], 1)
+        self.assertEqual(indicators["busy"], 0)
+        self.assertTrue(monitor.snapshot()["data"]["queues"][0]["monitored"])
         with self.assertRaisesRegex(PABXError, "cdr_disabled"):
             monitor.history(date(2026, 11, 1), date(2026, 11, 7))
-        for method, resource in (("POST", "filas"), ("GET", "dashboard-extension"), ("POST", "relatorio-cdr/search")):
+        for method, resource in (("POST", "filas"), ("GET", "relatorio-cdr/search"), ("POST", "relatorio-cdr/search")):
             with self.assertRaisesRegex(PABXError, "http_read_only"):
                 client.query(method, resource)
         self.assertEqual(
             [(method, url.rsplit("/", 1)[1]) for method, url, _ in provider.calls],
-            [("POST", "login")] + [("GET", "ramais"), ("GET", "ramais"), ("GET", "filas")] * 2,
+            [("POST", "login")] + [
+                ("GET", "ramais"), ("GET", "ramais"), ("GET", "filas"),
+                ("GET", "dashboard-extension"), ("GET", "dashboard-queue"),
+            ] * 2,
         )
         self.assertTrue(all(not args["allow_redirects"] for _, _, args in provider.calls))
+
+    def test_extension_state_uses_provider_status_over_registration(self):
+        for reported, expected in (("NOT_INUSE", "available"), ("INUSE", "busy"), ("RINGING", "ringing")):
+            with self.subTest(reported=reported):
+                self.assertEqual(extension_state({"registered": True}, reported), (expected, True))
 
     def test_operational_status_scope_and_last_valid_collection(self):
         provider = Provider()

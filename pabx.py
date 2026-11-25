@@ -102,6 +102,7 @@ def _token_expiry(data, token, now):
 
 class PABXClient:
     LOGIN_COOLDOWN = 30
+    HTTP_READ_RESOURCES = frozenset(("ramais", "filas", "dashboard-extension", "dashboard-queue"))
 
     def __init__(self, config, transport=None):
         self.config = config
@@ -200,7 +201,7 @@ class PABXClient:
             return self._token
 
     def query(self, method, resource, *, params=None, payload=None, deadline=None):
-        if self.config.uses_http and (method != "GET" or resource not in ("ramais", "filas")):
+        if self.config.uses_http and (method != "GET" or resource not in self.HTTP_READ_RESOURCES):
             raise PABXError("http_read_only")
         path = "/api/v1/admin/" + resource
         token = self._access_token(deadline=deadline)

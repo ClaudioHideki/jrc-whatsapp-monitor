@@ -145,8 +145,8 @@ local. Guarde a origem na configuração persistente do servidor local para
 retomar a coleta após reiniciar.
 
 Nesse modo, a única operação POST é o login para obter ou renovar o token.
-A coleta consulta por GET as listas de ramais e filas. O histórico CDR e os
-painéis de estado em tempo real usam o modo HTTPS.
+A coleta consulta por GET as listas e os dashboards de ramais e filas.
+O histórico CDR usa o modo HTTPS.
 
 ### Testes locais
 

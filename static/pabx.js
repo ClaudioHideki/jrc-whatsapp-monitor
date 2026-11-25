@@ -6,7 +6,7 @@
   const formatCount = new Intl.NumberFormat("pt-BR");
   const formatTime = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "medium" });
   const stateLabels = {
-    available: "Disponível", busy: "Ocupado", ringing: "Tocando",
+    available: "Livre", busy: "Ocupado", ringing: "Tocando",
     registered: "Registrado", unregistered: "Não registrado", unknown: "Estado indefinido",
   };
   const messages = {
@@ -111,8 +111,7 @@
       const summary = element("summary", queue.name);
       const context = element("span", [
         `${formatCount.format(queue.members.length)} membros`,
-        queue.strategy, queue.monitored === null ? "" :
-          queue.monitored ? "Presente no painel operacional" : "Sem dados no painel operacional",
+        queue.strategy, queue.monitored ? "Presente no painel operacional" : "Sem dados no painel operacional",
       ].filter(Boolean).join(" · "));
       context.className = "muted";
       summary.append(" ", context);

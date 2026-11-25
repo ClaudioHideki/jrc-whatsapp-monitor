@@ -132,9 +132,7 @@ def operational_data(client, stop):
 
     directory = check_scope(pages(lambda page: query("ramais", page).get("ramais"), limit=50), "accountcode", account)
     queues = check_scope(pages(lambda page: query("filas", page), limit=50), "accountcode", account)
-    live_items, states, live_queue_codes, active_calls = (
-        ([], {}, None, None) if config.uses_http else operational_status(query, account)
-    )
+    live_items, states, live_queue_codes, active_calls = operational_status(query, account)
 
     people = {}
     for item in directory:
@@ -180,7 +178,7 @@ def operational_data(client, stop):
             })
         queue_results.append({
             "code": code, "name": name, "strategy": label(queue.get("strategy")),
-            "monitored": None if live_queue_codes is None else code in live_queue_codes,
+            "monitored": code in live_queue_codes,
             "members": members,
         })
 
@@ -189,10 +187,8 @@ def operational_data(client, stop):
         key=lambda person: (person["extension"], person["name"]),
     )
     counts = Counter(person["status"] for person in ramais)
-    known_state = not config.uses_http and (not ramais or counts["unknown"] < len(ramais))
-    known_registration = not config.uses_http and (
-        not ramais or any(person["registered"] is not None for person in ramais)
-    )
+    known_state = not ramais or counts["unknown"] < len(ramais)
+    known_registration = not ramais or any(person["registered"] is not None for person in ramais)
     return {
         "indicators": {
             "total": len(ramais),

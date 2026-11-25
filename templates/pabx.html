@@ -31,7 +31,7 @@
       <p class="muted" id="pabx-company" hidden></p>
       <p id="pabx-message" role="status">Verificando conexão…</p>
       {% if http_mode %}
-      <p class="muted">Coleta por HTTP restrita a ramais e filas.</p>
+      <p class="muted">Coleta por HTTP de ramais, filas e seus estados.</p>
       {% endif %}
     </div>
     <div class="pabx-collection">
@@ -45,9 +45,9 @@
       {% if not http_mode %}<a href="#pabx-history">Ir para o histórico CDR ↓</a>{% endif %}
     </div>
     <div class="summary-grid pabx-summary">
-      {% set indicators = [('total', 'Ramais'), ('queues', 'Filas')] if http_mode else [
-        ('total', 'Ramais'), ('active_calls', 'Chamadas ativas'),
-        ('available', 'Disponíveis'), ('busy', 'Ocupados'),
+      {% set indicators = [
+        ('total', 'Ramais'), ('queues', 'Filas') if http_mode else ('active_calls', 'Chamadas ativas'),
+        ('available', 'Livres'), ('busy', 'Ocupados'),
         ('ringing', 'Tocando'), ('registered', 'Registrados'),
         ('unregistered', 'Não registrados'), ('unknown', 'Estado indefinido')
       ] %}
@@ -67,7 +67,7 @@
       <label>Status
         <select id="pabx-state">
           <option value="">Todos os estados</option>
-          <option value="available">Disponível</option>
+          <option value="available">Livre</option>
           <option value="busy">Ocupado</option>
           <option value="ringing">Tocando</option>
           <option value="registered">Registrado</option>
