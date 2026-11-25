@@ -9,6 +9,10 @@
     available: "Livre", busy: "Ocupado", ringing: "Tocando", in_call: "Em ligação",
     registered: "Registrado", unregistered: "Não registrado", unknown: "Estado indefinido",
   };
+  const stateTones = {
+    available: "green", busy: "orange", ringing: "amber", in_call: "cyan",
+    registered: "blue", unregistered: "red", unknown: "neutral",
+  };
   const messages = {
     connected: "API conectada.",
     starting: "Aguardando a primeira coleta.",
@@ -39,11 +43,12 @@
     csrf: "A sessão do formulário expirou. Recarregue a página.",
   };
   const search = byId("pabx-search");
-  const stateFilter = byId("pabx-state");
+  const stateFilters = [...dashboard.querySelectorAll("[data-extension-filter]")];
   const queueFilter = byId("pabx-queue");
   const extensionPrevious = byId("pabx-extension-prev");
   const extensionNext = byId("pabx-extension-next");
   const extensionsPerPage = 10;
+  let extensionState = "";
   let extensionPage = 1;
   let snapshot;
   let lastRendered = null;
@@ -68,6 +73,7 @@
     const badge = element("span", stateLabels[state] || stateLabels.unknown);
     badge.className = "pabx-state";
     badge.dataset.state = state;
+    badge.dataset.tone = stateTones[state] || stateTones.unknown;
     return badge;
   }
 
@@ -151,17 +157,28 @@
     return td;
   }
 
+  function matchesExtensionState(row, state) {
+    if (state === "available") return row.status === state && row.in_call !== true;
+    if (state === "in_call") return row.in_call === true;
+    if (state === "registered") return row.registered === true;
+    return !state || row.status === state;
+  }
+
   function renderExtensions() {
     const term = search.value.trim().toLocaleLowerCase("pt-BR");
-    const state = stateFilter.value;
     const extensions = snapshot?.data?.extensions;
-    const rows = (extensions || []).filter((row) => {
-      const matchesState = state === "in_call" ? row.in_call === true :
-        state === "registered" ? row.registered === true : !state || row.status === state;
-      return matchesState &&
-        (!queueFilter.value || row.queues.some((queue) => queue.code === queueFilter.value)) &&
-        (!term || `${row.extension} ${row.name}`.toLocaleLowerCase("pt-BR").includes(term));
-    });
+    const matching = (extensions || []).filter((row) =>
+      (!queueFilter.value || row.queues.some((queue) => queue.code === queueFilter.value)) &&
+      (!term || `${row.extension} ${row.name}`.toLocaleLowerCase("pt-BR").includes(term)));
+    for (const button of stateFilters) {
+      const state = button.dataset.extensionFilter;
+      const known = extensions && (state !== "in_call" || snapshot.data.indicators.extensions_in_call != null);
+      button.setAttribute("aria-pressed", String(state === extensionState));
+      button.querySelector("span").textContent = known
+        ? formatCount.format(matching.filter(row => matchesExtensionState(row, state)).length) : "—";
+    }
+    const rows = matching.filter(row => matchesExtensionState(row, extensionState));
+    rows.sort((a, b) => Number(a.status === "unregistered") - Number(b.status === "unregistered"));
     const pageCount = Math.ceil(rows.length / extensionsPerPage);
     extensionPage = Math.min(extensionPage, pageCount || 1);
     const start = (extensionPage - 1) * extensionsPerPage;
@@ -173,10 +190,11 @@
       const tr = element("tr");
       tr.dataset.extension = JSON.stringify([row.extension, row.name]);
       const stateCell = element("td");
-      stateCell.append(statusBadge(row.status));
-      if (row.in_call) stateCell.append(statusBadge("in_call"));
+      stateCell.append(statusBadge(row.in_call ? "in_call" : row.status));
+      if (row.in_call && row.status === "ringing") stateCell.append(statusBadge("ringing"));
       const registration = row.registered == null ? "" : row.registered ? "Registrado" : "Não registrado";
-      tr.append(cell(row.extension), cell(row.name), stateCell, cell(registration), extensionQueues(row.queues, opened.has(tr.dataset.extension)));
+      tr.append(cell(row.extension), cell(row.name || "Nome não informado"), stateCell, cell(registration),
+        extensionQueues(row.queues, opened.has(tr.dataset.extension)));
       fragment.append(tr);
     }
     tbody.replaceChildren(fragment);
@@ -187,9 +205,9 @@
         countMessage = pageCount > 1
           ? `${formatCount.format(start + 1)}–${formatCount.format(start + visibleRows.length)} de ${count} ramais.`
           : `${count} ${rows.length === 1 ? "ramal encontrado" : "ramais encontrados"}.`;
-      } else if (state === "in_call" && snapshot.data.indicators.extensions_in_call == null) {
+      } else if (extensionState === "in_call" && snapshot.data.indicators.extensions_in_call == null) {
         countMessage = "A API ainda não informou os ramais em ligação.";
-      } else if (state === "in_call" && !term && !queueFilter.value) {
+      } else if (extensionState === "in_call" && !term && !queueFilter.value) {
         countMessage = "Nenhum ramal em ligação identificado nesta coleta.";
       } else countMessage = "Nenhum ramal encontrado para os filtros selecionados.";
     }
@@ -311,7 +329,12 @@
   }
 
   search.addEventListener("input", filterExtensions);
-  stateFilter.addEventListener("change", filterExtensions);
+  for (const button of stateFilters) {
+    button.addEventListener("click", () => {
+      extensionState = button.dataset.extensionFilter;
+      filterExtensions();
+    });
+  }
   queueFilter.addEventListener("change", filterExtensions);
   extensionPrevious.addEventListener("click", () => { extensionPage -= 1; renderExtensions(); });
   extensionNext.addEventListener("click", () => { extensionPage += 1; renderExtensions(); });

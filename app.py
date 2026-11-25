@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
 from pabx_routes import register_pabx
+from tv_views import paginate
 
 load_dotenv()
 
@@ -208,9 +209,28 @@ def whatsapp_tv():
     snapshot = get_monitor_data()
     attention = [instance for instance in snapshot["instances"] if instance["status"] != "connected"]
     attention.sort(key=lambda instance: instance["status"] != "disconnected")
+    view = request.args.get("visao", "resumo")
+    if view not in ("resumo", "instancias", "apis"):
+        view = "resumo"
+    entries = snapshot["sources"] if view == "apis" else snapshot["instances"]
+    filters = {"busca": "", "status": "", "api": ""}
+    if view == "instancias":
+        filters.update(
+            busca=request.args.get("busca", "").strip()[:150], status=request.args.get("status", ""),
+            api=request.args.get("api", ""),
+        )
+        term = filters["busca"].casefold()
+        entries = [
+            row for row in entries
+            if (not filters["status"] or row["status"] == filters["status"])
+            and (not filters["api"] or row["source"] == filters["api"])
+            and term in " ".join(str(row.get(field) or "") for field in ("client", "inbox", "number", "profile", "instance")).casefold()
+        ]
     return render_template(
         "tv.html", mode="whatsapp", refresh=60, indicators=snapshot["summary"],
-        snapshot=snapshot, attention=attention, updated=datetime.fromtimestamp(snapshot["generated_at"], timezone.utc),
+        snapshot=snapshot, attention=attention, view=view, filters=filters,
+        page=paginate(entries, request.args.get("pagina", 1, type=int), 10),
+        updated=datetime.fromtimestamp(snapshot["generated_at"], timezone.utc),
     ), 200, {"Cache-Control": "no-store"}
 
 @app.route("/api/status", methods=["GET"])

@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>JRC Monitoramento PABX</title>
+  <noscript><meta http-equiv="refresh" content="0;url={{ url_for('pabx.tv') }}"></noscript>
+  <script id="tv-fallback" src="{{ url_for('static', filename='tv-fallback.js') }}" data-monitor="pabx" data-tv-url="{{ url_for('pabx.tv') }}"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='pabx.css') }}">
 </head>
@@ -42,6 +44,37 @@
       <span>Última coleta válida <strong id="pabx-time">—</strong></span>
     </div>
   </section>
+  <section class="pabx-panel pabx-roster" aria-labelledby="extensions-heading">
+    <div class="pabx-section-heading">
+      <h2 id="extensions-heading">Disponibilidade dos ramais</h2>
+      <a href="#overview-heading">Indicadores e gráficos ↓</a>
+    </div>
+    <div class="pabx-quick-filters" role="group" aria-label="Filtrar por status">
+      {% for key, label, tone in [('', 'Todos', 'blue'), ('available', 'Livres', 'green'), ('in_call', 'Em ligação', 'cyan'),
+        ('ringing', 'Tocando', 'amber'), ('busy', 'Ocupados', 'orange'), ('unregistered', 'Não registrados', 'red'),
+        ('registered', 'Registrados', 'neutral'), ('unknown', 'Estado indefinido', 'neutral')] %}
+        <button type="button" data-extension-filter="{{ key }}" data-tone="{{ tone }}"
+                aria-pressed="{{ 'false' if key else 'true' }}" aria-controls="pabx-extensions">{{ label }} <span>—</span></button>
+      {% endfor %}
+    </div>
+    <div class="pabx-filters">
+      <label>Buscar por nome ou ramal <input id="pabx-search" type="search" placeholder="Nome ou ramal"></label>
+      <label>Fila <select id="pabx-queue"><option value="">Todas as filas</option></select></label>
+    </div>
+    <p id="pabx-extension-count" class="muted" role="status"></p>
+    <div class="pabx-table-wrap" tabindex="0" aria-label="Tabela de ramais">
+      <table class="client-table pabx-table pabx-extension-table">
+        <thead><tr><th scope="col">Ramal</th><th scope="col">Nome cadastrado</th><th scope="col">Estado</th><th scope="col">Registro</th><th scope="col">Filas</th></tr></thead>
+        <tbody id="pabx-extensions"></tbody>
+      </table>
+    </div>
+    <div class="pabx-pagination" id="pabx-extension-pagination" role="group" aria-label="Paginação dos ramais" hidden>
+      <button type="button" class="clear-btn" id="pabx-extension-prev" aria-controls="pabx-extensions">Anterior</button>
+      <span id="pabx-extension-page" aria-live="polite"></span>
+      <button type="button" class="clear-btn" id="pabx-extension-next" aria-controls="pabx-extensions">Próxima</button>
+    </div>
+  </section>
+
   <section aria-labelledby="overview-heading">
     <div class="pabx-section-heading">
       <h2 id="overview-heading">Visão operacional</h2>
@@ -71,38 +104,6 @@
         <h3 id="registration-chart-title">Registro dos ramais</h3>
         <div id="pabx-registration-chart"><p class="muted">Aguardando dados de ramais.</p></div>
       </section>
-    </div>
-  </section>
-
-  <section class="pabx-panel" aria-labelledby="extensions-heading">
-    <h2 id="extensions-heading">Ramais</h2>
-    <div class="pabx-filters">
-      <label>Buscar por nome ou ramal <input id="pabx-search" type="search" placeholder="Nome ou ramal"></label>
-      <label>Status
-        <select id="pabx-state">
-          <option value="">Todos os estados</option>
-          <option value="available">Livre</option>
-          <option value="busy">Ocupado</option>
-          <option value="ringing">Tocando</option>
-          <option value="in_call">Em ligação</option>
-          <option value="registered">Registrado</option>
-          <option value="unregistered">Não registrado</option>
-          <option value="unknown">Estado indefinido</option>
-        </select>
-      </label>
-      <label>Fila <select id="pabx-queue"><option value="">Todas as filas</option></select></label>
-    </div>
-    <p id="pabx-extension-count" class="muted" role="status"></p>
-    <div class="pabx-table-wrap" tabindex="0" aria-label="Tabela de ramais">
-      <table class="client-table pabx-table pabx-extension-table">
-        <thead><tr><th scope="col">Ramal</th><th scope="col">Nome cadastrado</th><th scope="col">Estado</th><th scope="col">Registro</th><th scope="col">Filas</th></tr></thead>
-        <tbody id="pabx-extensions"></tbody>
-      </table>
-    </div>
-    <div class="pabx-pagination" id="pabx-extension-pagination" role="group" aria-label="Paginação dos ramais" hidden>
-      <button type="button" class="clear-btn" id="pabx-extension-prev" aria-controls="pabx-extensions">Anterior</button>
-      <span id="pabx-extension-page" aria-live="polite"></span>
-      <button type="button" class="clear-btn" id="pabx-extension-next" aria-controls="pabx-extensions">Próxima</button>
     </div>
   </section>
 

@@ -1,0 +1,84 @@
+{% from '_tv_components.html' import pager, bars %}
+{% if view == 'ramais' %}
+<section class="tv-panel tv-roster" aria-labelledby="tv-extension-title">
+  <h2 id="tv-extension-title">Disponibilidade dos ramais <span class="tv-muted">{{ page.total if snapshot.data else '' }}</span></h2>
+  <form class="tv-filter-form" method="get" action="{{ url_for('pabx.tv') }}">
+    <label>Nome ou ramal <input name="busca" type="search" value="{{ filters.busca }}" maxlength="150"></label>
+    <label>Status <select name="status"><option value="">Todos</option>
+      {% for key, label in states.items() %}<option value="{{ key }}" {% if filters.status == key %}selected{% endif %}>{{ label[0] }}</option>{% endfor %}
+    </select></label>
+    <label>Fila <select name="fila"><option value="">Todas</option>
+      {% for queue in queues %}<option value="{{ queue.code }}" {% if filters.fila == queue.code %}selected{% endif %}>{{ queue.name }}</option>{% endfor %}
+    </select></label>
+    <button type="submit">Filtrar</button>
+  </form>
+  {% if page.rows %}
+  <ul class="tv-extensions">
+    {% for row in page.rows %}
+    {% set state, tone = states.get('in_call' if row.in_call else row.status, states.unknown) %}
+    <li class="tv-extension tv-accent-{{ tone }}">
+      <div class="tv-extension-top">
+        <span class="tv-extension-number">{{ row.extension or '—' }}</span>
+        <span class="tv-extension-state tv-{{ tone }}">{{ state }}{% if row.in_call and row.status == 'ringing' %} · Tocando{% endif %}</span>
+      </div>
+      <strong class="tv-extension-name">{{ row.name or 'Nome não informado' }}</strong>
+      {% if row.queues %}
+      <span class="tv-extension-queue" title="{{ row.queues|map(attribute='name')|join(' · ') }}">{{ row.queues[0].name }}{% if row.queues|length > 1 %} +{{ row.queues|length - 1 }}{% endif %}</span>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {{ pager(page, 'pabx.tv', 'ramais', filters) }}
+  {% else %}<p>{{ 'Nenhum ramal encontrado.' if snapshot.data else 'Aguardando dados de ramais.' }}</p>{% endif %}
+</section>
+{% elif view == 'indicadores' %}
+{% set cards = [('total', 'Ramais', 'blue'), ('queues', 'Filas', 'blue'), ('active_calls', 'Chamadas ativas', 'blue'),
+  ('extensions_in_call', 'Ramais em ligação', 'blue'), ('available', 'Livres', 'good'), ('busy', 'Ocupados', 'orange'),
+  ('ringing', 'Tocando', 'warn'), ('registered', 'Registrados', 'good'), ('unregistered', 'Não registrados', 'error'),
+  ('unknown', 'Estado indefinido', 'neutral')] %}
+<section class="tv-kpis" aria-label="Indicadores PABX">
+  {% for key, label, tone in cards %}
+  {% set value = indicators.get(key) %}
+  <article class="tv-kpi tv-accent-{{ tone }}"><span>{{ label }}</span><strong data-indicator="{{ key }}">{{ '—' if value is none else value }}</strong></article>
+  {% endfor %}
+</section>
+<div class="tv-columns">
+  <section class="tv-panel tv-panel-wide" aria-labelledby="tv-state-chart">
+    <h2 id="tv-state-chart">Estado dos ramais</h2>
+    {% set chart = [] %}
+    {% for key in ['available', 'busy', 'ringing', 'registered', 'unregistered', 'unknown'] %}
+      {% set _ = chart.append(('Registrados sem estado de chamada' if key == 'registered' else states[key][0], extensions|selectattr('status', 'equalto', key)|list|length)) %}
+    {% endfor %}
+    {{ bars(chart, extensions|length) }}
+  </section>
+  <section class="tv-panel tv-panel-narrow" aria-labelledby="tv-registration-chart">
+    <h2 id="tv-registration-chart">Registro dos ramais</h2>
+    {{ bars([
+      ('Registrados', extensions|selectattr('registered', 'sameas', true)|list|length),
+      ('Não registrados', extensions|selectattr('registered', 'sameas', false)|list|length),
+      ('Registro não informado', extensions|selectattr('registered', 'none')|list|length)
+      ], extensions|length, 'good') }}
+  </section>
+</div>
+{% else %}
+<section aria-labelledby="queues-title">
+  <h2 id="queues-title">Atendentes por fila</h2>
+  {% for queue in queues %}
+  <section class="tv-panel tv-queue">
+    <h3>{{ queue.name }}</h3>
+    <p>{{ queue.members|length }} {{ 'membro' if queue.members|length == 1 else 'membros' }}{% if queue.strategy %} · {{ queue.strategy }}{% endif %} · {{ 'Presente no painel operacional' if queue.monitored else 'Sem dados no painel operacional' }}</p>
+    {% if queue.members %}
+    <ul class="tv-list">
+      {% for member in queue.members %}
+      {% set state, tone = states.get('in_call' if member.in_call else member.status, states.unknown) %}
+      <li>
+        <div class="tv-identity"><strong>{{ member.name or 'Nome não informado' }}</strong><span>Ramal {{ member.extension or 'não informado' }}</span></div>
+        <span class="tv-{{ tone }}">{{ state }} · {{ 'Pausa não informada' if member.paused is none else 'Pausado' if member.paused else 'Não pausado' }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {% else %}<p>{{ 'Nenhuma fila cadastrada.' if snapshot.data else 'Aguardando dados de filas.' }}</p>{% endfor %}
+</section>
+{% endif %}

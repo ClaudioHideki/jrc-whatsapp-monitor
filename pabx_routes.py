@@ -8,7 +8,7 @@ import threading
 from collections import Counter
 from contextlib import ExitStack, closing
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import wraps
 from itertools import chain
 from urllib.parse import unquote, urlsplit
@@ -20,6 +20,7 @@ from imageio_ffmpeg import get_ffmpeg_exe
 
 from pabx import PABXError
 from pabx_store import PABXProfile, PABXService
+from tv_views import paginate
 
 
 ERROR_STATUS = {
@@ -82,8 +83,24 @@ ADMIN_MESSAGES = {
 }
 
 
-def filters_from_request():
-    filters = request.get_json(silent=True)
+TV_EXTENSION_STATES = {
+    "available": ("Livre", "good"), "in_call": ("Em ligação", "blue"), "ringing": ("Tocando", "warn"),
+    "busy": ("Ocupado", "orange"), "registered": ("Registrado", "blue"),
+    "unregistered": ("Não registrado", "error"), "unknown": ("Estado indefinido", "neutral"),
+}
+
+
+def matches_tv_extension(row, state):
+    if state == "available":
+        return row["status"] == state and not row["in_call"]
+    if state == "in_call":
+        return row["in_call"] is True
+    if state == "registered":
+        return row["registered"] is True
+    return not state or row["status"] == state
+
+
+def parse_history_filters(filters):
     if not isinstance(filters, dict):
         raise PABXError("filters")
     dates = (filters.get("start"), filters.get("end"))
@@ -447,21 +464,44 @@ def register_pabx(app, login_required, login_user, login_password):
             "disabled": "Monitoramento desativado.", "scope_pending": "Confirme o escopo do monitoramento.",
         }
         data = snapshot["data"] or {}
+        view = request.args.get("visao", "ramais")
+        if view not in ("ramais", "indicadores", "filas"):
+            view = "ramais"
+        extensions = data.get("extensions", [])
+        queues = data.get("queues", [])
+        filters = {"busca": "", "status": "", "fila": ""}
+        if view == "ramais":
+            filters.update(
+                busca=request.args.get("busca", "").strip()[:150],
+                status=request.args.get("status", ""), fila=request.args.get("fila", ""),
+            )
+            if filters["status"] not in TV_EXTENSION_STATES:
+                filters["status"] = ""
+            if not any(queue["code"] == filters["fila"] for queue in queues):
+                filters["fila"] = ""
+            term = filters["busca"].casefold()
+            extensions = [
+                row for row in extensions
+                if term in f'{row["extension"]} {row["name"]}'.casefold()
+                and (not filters["fila"] or any(queue["code"] == filters["fila"] for queue in row["queues"]))
+                and matches_tv_extension(row, filters["status"])
+            ]
+            extensions = sorted(extensions, key=lambda row: row["status"] == "unregistered")
+        _, _, monitor = service.current() if service else (None, 0, None)
         return render_template(
             "tv.html", mode="pabx", refresh=15, indicators=data.get("indicators", {}),
-            snapshot=snapshot, queues=data.get("queues", []),
+            snapshot=snapshot, queues=queues, view=view, states=TV_EXTENSION_STATES, filters=filters,
+            extensions=extensions, page=paginate(extensions, request.args.get("pagina", 1, type=int), 12),
+            cdr_enabled=bool(monitor and monitor.client.config.cdr_customer),
             connection=states.get(snapshot["state"]) or ADMIN_MESSAGES.get(snapshot["state"], "Falha ao consultar o PABX."),
             updated=datetime.fromisoformat(snapshot["last_success"]) if snapshot["last_success"] else None,
         )
 
-    @routes.post("/api/pabx/cdr")
-    @routes.post("/api/pabx/cdr/export", endpoint="export_history", defaults={"export": True})
-    @api_auth
-    def history(export=False):
+    def read_history(filters):
         _, _, monitor = service.current() if service else (None, 0, None)
         if monitor is None:
             raise PABXError(config_error or "cdr_disabled")
-        start, end, status, direction, recording_only = filters_from_request()
+        start, end, status, direction, recording_only = parse_history_filters(filters)
         rows = monitor.history(start, end)
         if service.current()[2] is not monitor:
             raise PABXError("config_changed")
@@ -471,13 +511,65 @@ def register_pabx(app, login_required, login_user, login_password):
             and (not direction or row["direction"].casefold() == direction)
             and (not recording_only or row["recording"])
         ]
-        if export:
-            return cdr_csv(selected)
-        return jsonify(
+        return dict(
             records=selected,
             statuses=sorted({row["status"] for row in rows if row["status"]}, key=str.casefold),
             directions=sorted({row["direction"] for row in rows if row["direction"]}, key=str.casefold),
         )
+
+    @routes.post("/api/pabx/cdr")
+    @routes.post("/api/pabx/cdr/export", endpoint="export_history", defaults={"export": True})
+    @api_auth
+    def history(export=False):
+        result = read_history(request.get_json(silent=True))
+        return cdr_csv(result["records"]) if export else jsonify(result)
+
+    @routes.route("/tv/pabx/historico", methods=["GET", "POST"])
+    def tv_history():
+        if not login_required():
+            return redirect(url_for("login", tv="pabx"))
+        if not authorized():
+            return redirect(url_for("dashboard"))
+        _, _, monitor = service.current() if service else (None, 0, None)
+        cdr_enabled = bool(monitor and monitor.client.config.cdr_customer)
+        today = date.today()
+        filters = {"start": (today - timedelta(days=6)).isoformat(), "end": today.isoformat()}
+        csrf = session.setdefault("pabx_csrf", secrets.token_hex(32))
+        context = {"result": None, "error": None}
+        code = 200
+        if request.method == "POST":
+            try:
+                if not 0 < (request.content_length or 0) <= 16384:
+                    raise PABXError("filters")
+                if not valid_csrf(request.form.get("csrf", "")):
+                    raise PABXError("csrf")
+                if not cdr_enabled:
+                    raise PABXError("cdr_disabled")
+                filters = {field: request.form.get(field, "") for field in ("start", "end", "status", "direction")}
+                filters["recording_only"] = request.form.get("recording_only") == "1"
+                result = read_history(filters)
+                rows = result["records"]
+                if request.form.get("action") == "export":
+                    return cdr_csv(rows)
+                context.update(
+                    result=result, page=paginate(rows, request.form.get("pagina", 1, type=int), 15),
+                    status_chart=Counter(row["status"] or "Não informada" for row in rows).most_common(),
+                    direction_chart=Counter(row["direction"] or "Não informada" for row in rows).most_common(),
+                    status_totals=Counter(row["status"].casefold() for row in rows),
+                    recordings=list(dict.fromkeys(row["recording_id"] for row in rows if row["recording_id"])),
+                )
+            except PABXError as error:
+                code = ERROR_STATUS.get(error.code, 502)
+                context["error"] = {
+                    "filters": "Escolha um período válido de até 31 dias.",
+                    "history_busy": "Já existe uma consulta em andamento. Tente novamente em instantes.",
+                    "page_limit": "O resultado excedeu o limite de páginas. Reduza o período.",
+                    "cdr_disabled": "O histórico ainda não está habilitado.",
+                }.get(error.code, ADMIN_MESSAGES.get(error.code, "Falha ao consultar o histórico CDR."))
+        return render_template(
+            "tv_history.html", mode="pabx", view="historico", cdr_enabled=cdr_enabled,
+            filters=filters, csrf=csrf, **context,
+        ), code
 
     @routes.get("/api/pabx/recordings/<recording_id>")
     @api_auth

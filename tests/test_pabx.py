@@ -412,6 +412,9 @@ class RouteTests(unittest.TestCase):
         monitor._collect()
         with patch.object(self.service, "current", return_value=(PROFILE, 1, monitor)):
             result = self.client.get(path)
+            free = self.client.get(f"{path}?status=available")
+            charts = self.client.get(f"{path}?visao=indicadores")
+            queues = self.client.get(f"{path}?visao=filas")
 
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.headers["Cache-Control"], "no-store")
@@ -420,6 +423,37 @@ class RouteTests(unittest.TestCase):
         self.assertIn(b"Suporte teste", result.data)
         self.assertNotIn(b"<script", result.data)
         self.assertNotIn(PROFILE.password.encode(), result.data)
+        self.assertIn(b"Bruno Teste", free.data)
+        self.assertNotIn(b"Ana Teste", free.data)
+        self.assertIn(b"Estado dos ramais", charts.data)
+        self.assertIn(b"Registro dos ramais", charts.data)
+        self.assertIn(b"Ramal 102", queues.data)
+        self.assertIn(b"Bruno Teste", queues.data)
+
+    def test_tv_history_is_opt_in_and_reuses_cdr_permissions_and_downloads(self):
+        self.sign_in()
+        self.provider.cdr = [{**CDR[0], "arquivo_audio": f"{PROFILE.url}/recordings/private.wav"}]
+        monitor = PABXMonitor(PABXClient(CONFIG, self.provider))
+        source = "/tv/pabx/historico"
+        filters = {**DATES, "recording_only": "1", "csrf": "a" * 64}
+        with patch.object(self.service, "current", return_value=(PROFILE, 1, monitor)):
+            landing = self.client.get(source)
+            self.assertEqual(landing.status_code, 200)
+            self.assertNotIn(b'http-equiv="refresh"', landing.data)
+            self.assertEqual(self.client.post(source, data={**filters, "csrf": "invalid"}).status_code, 403)
+            self.assertEqual(self.provider.calls, [])
+            with patch("pabx_routes.requests.Session") as media:
+                report = self.client.post(source, data=filters)
+                self.assertEqual(report.status_code, 200)
+                self.assertIn(b"1 registro CDR", report.data)
+                self.assertIn(b"Registros por situa", report.data)
+                self.assertIn(b"Baixar grava", report.data)
+                self.assertIn(b"name=\"recording_id\"", report.data)
+                self.assertNotIn(b"private.wav", report.data)
+                exported = self.client.post(source, data={**filters, "action": "export"})
+                self.assertEqual(exported.mimetype, "text/csv")
+                self.assertEqual(len(exported.get_data(as_text=True).splitlines()), 2)
+                media.assert_not_called()
 
     def test_dokploy_http_profile_is_fixed_for_remote_admin(self):
         fixed = PABXProfile(company="JRC", url=HTTP_ORIGIN, account="demo", interval=15, cdr_customer="55")
@@ -787,6 +821,8 @@ class WhatsAppTests(unittest.TestCase):
             self.assertEqual(login.location, "/tv")
             result = client.get("/tv")
             provider.assert_called_once()
+            directory = client.get("/tv?visao=instancias&status=disconnected")
+            source = client.get("/tv?visao=apis")
 
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.headers["Cache-Control"], "no-store")
@@ -794,6 +830,8 @@ class WhatsAppTests(unittest.TestCase):
         self.assertIn(b"Cliente teste", result.data)
         self.assertIn(b"Desconectado", result.data)
         self.assertNotIn(b"<script", result.data)
+        self.assertIn(b"Cliente teste", directory.data)
+        self.assertIn(b"API teste", source.data)
 
     def test_login_rejects_public_default_password_or_session_key(self):
         import runpy

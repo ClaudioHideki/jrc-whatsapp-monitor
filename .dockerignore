@@ -6,6 +6,7 @@
 !pabx_routes.py
 !pabx_store.py
 !requirements.txt
+!tv_views.py
 !static
 !static/**
 !templates

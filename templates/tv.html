@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="{{ refresh }}">
+  {% if refresh %}<meta http-equiv="refresh" content="{{ refresh }}">{% endif %}
   <title>{{ 'PABX' if mode == 'pabx' else 'WhatsApp' }} | JRC Modo TV</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='tv.css') }}">
 </head>
@@ -20,6 +20,19 @@
     </nav>
   </header>
   <main class="tv-main">
+    <nav class="tv-nav tv-sections" aria-label="Seções do monitoramento">
+      {% if mode == 'pabx' %}
+      <a href="{{ url_for('pabx.tv') }}" {% if view == 'ramais' %}aria-current="page"{% endif %}>Ramais</a>
+      <a href="{{ url_for('pabx.tv', visao='indicadores') }}" {% if view == 'indicadores' %}aria-current="page"{% endif %}>Indicadores e gráficos</a>
+      <a href="{{ url_for('pabx.tv', visao='filas') }}" {% if view == 'filas' %}aria-current="page"{% endif %}>Filas</a>
+      <a href="{{ url_for('pabx.tv_history') }}" {% if view == 'historico' %}aria-current="page"{% endif %}>Histórico CDR</a>
+      {% else %}
+      <a href="{{ url_for('whatsapp_tv') }}" {% if view == 'resumo' %}aria-current="page"{% endif %}>Resumo</a>
+      <a href="{{ url_for('whatsapp_tv', visao='instancias') }}" {% if view == 'instancias' %}aria-current="page"{% endif %}>Todas as instâncias</a>
+      <a href="{{ url_for('whatsapp_tv', visao='apis') }}" {% if view == 'apis' %}aria-current="page"{% endif %}>Todas as APIs</a>
+      {% endif %}
+    </nav>
+    {% block content %}
     <div class="tv-meta">
       {% if mode == 'pabx' %}
       <span>{{ snapshot.company }}</span>
@@ -33,14 +46,11 @@
     </div>
 
     {% if mode == 'pabx' %}
-      {% set cards = [('total', 'Ramais', 'blue'), ('active_calls', 'Chamadas ativas', 'blue'),
-        ('available', 'Livres', 'good'), ('busy', 'Ocupados', 'warn'), ('ringing', 'Tocando', 'warn'),
-        ('unregistered', 'Não registrados', 'error')] %}
-    {% else %}
+      {% include '_tv_pabx.html' %}
+    {% elif view == 'resumo' %}
       {% set cards = [('total', 'Instâncias', 'blue'), ('connected', 'Conectadas', 'good'),
         ('connecting', 'Conectando', 'warn'), ('disconnected', 'Desconectadas', 'error'),
         ('unknown', 'Desconhecidas', 'neutral'), ('apis_unavailable', 'APIs indisponíveis', 'error')] %}
-    {% endif %}
     <section class="tv-kpis" aria-label="Indicadores">
       {% for key, label, tone in cards %}
       {% set value = indicators.get(key) %}
@@ -51,7 +61,6 @@
       {% endfor %}
     </section>
 
-    {% if mode == 'whatsapp' %}
     <div class="tv-columns">
       <section class="tv-panel tv-panel-wide" aria-labelledby="attention-title">
         <h2 id="attention-title">Instâncias que precisam de atenção</h2>
@@ -67,7 +76,7 @@
           </li>
           {% endfor %}
         </ul>
-        {% if attention|length > 5 %}<p>+ {{ attention|length - 5 }} no painel completo</p>{% endif %}
+        {% if attention|length > 5 %}<p><a href="{{ url_for('whatsapp_tv', visao='instancias') }}">Ver todas as instâncias</a></p>{% endif %}
         {% elif snapshot.summary.total %}
         <p>Todas as instâncias retornadas estão conectadas.</p>
         {% else %}
@@ -82,30 +91,56 @@
           <li><strong>{{ source.name }}</strong><span class="tv-{{ 'good' if source.online else 'error' }}">{{ 'Online' if source.online else 'Indisponível' }}</span></li>
           {% endfor %}
         </ul>
-        {% if snapshot.sources|length > 5 %}<p>+ {{ snapshot.sources|length - 5 }} no painel completo</p>{% endif %}
+        {% if snapshot.sources|length > 5 %}<p><a href="{{ url_for('whatsapp_tv', visao='apis') }}">Ver todas as APIs</a></p>{% endif %}
         {% else %}<p>Nenhuma API configurada.</p>{% endif %}
       </section>
     </div>
     {% else %}
-    <section class="tv-panel" aria-labelledby="queues-title">
-      <h2 id="queues-title">Atendentes por fila</h2>
-      {% if queues %}
-      <ul class="tv-list tv-queues">
-        {% for queue in queues[:5] %}
-        <li>
-          <div class="tv-identity">
-            <strong>{{ queue.name }}</strong>
-            <span>{% for member in queue.members[:4] %}{{ member.name or member.extension or 'Nome não informado' }}{{ ' · ' if not loop.last }}{% else %}Sem membros{% endfor %}
-              {% if queue.members|length > 4 %} · +{{ queue.members|length - 4 }}{% endif %}
-            </span>
-          </div>
-        </li>
-        {% endfor %}
-      </ul>
-      {% if queues|length > 5 %}<p>+ {{ queues|length - 5 }} filas no painel completo</p>{% endif %}
-      {% else %}<p>{{ 'Nenhuma fila cadastrada.' if snapshot.data else 'Aguardando dados de filas.' }}</p>{% endif %}
+    {% from '_tv_components.html' import pager %}
+    <section class="tv-panel" aria-labelledby="whatsapp-list-title">
+      <h2 id="whatsapp-list-title">{{ 'APIs WhatsApp' if view == 'apis' else 'Instâncias WhatsApp' }} <span class="tv-muted">{{ page.total }}</span></h2>
+      {% if view == 'instancias' %}
+      <form class="tv-filter-form" method="get" action="{{ url_for('whatsapp_tv') }}">
+        <input type="hidden" name="visao" value="instancias">
+        <label>Cliente, caixa, número ou perfil <input name="busca" type="search" value="{{ filters.busca }}" maxlength="150"></label>
+        <label>Status <select name="status"><option value="">Todos</option>
+          {% for key, label in [('connected', 'Conectado'), ('connecting', 'Conectando'), ('disconnected', 'Desconectado'), ('unknown', 'Desconhecido')] %}
+          <option value="{{ key }}" {% if filters.status == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select></label>
+        <label>API <select name="api"><option value="">Todas</option>
+          {% for source in snapshot.sources %}<option {% if filters.api == source.name %}selected{% endif %}>{{ source.name }}</option>{% endfor %}
+        </select></label>
+        <button type="submit">Filtrar</button>
+      </form>
+      {% endif %}
+      <div class="tv-table-wrap" tabindex="0" aria-label="{{ 'APIs' if view == 'apis' else 'Instâncias' }} do WhatsApp">
+        <table class="tv-table">
+          {% if view == 'apis' %}
+          <thead><tr><th scope="col">API</th><th scope="col">Status</th><th scope="col">HTTP</th><th scope="col">Instâncias</th><th scope="col">Tempo</th></tr></thead>
+          <tbody>
+            {% for source in page.rows %}
+            <tr><td><strong>{{ source.name }}</strong><br>{{ source.host or '—' }}</td><td class="tv-{{ 'good' if source.online else 'error' }}">{{ 'Online' if source.online else 'Indisponível' }}{% if source.error %}<br>{{ source.error }}{% endif %}</td>
+              <td>{{ source.http_status or '—' }}</td><td>{{ source.count }}</td><td>{{ source.duration_ms if source.duration_ms is not none else '—' }} ms</td></tr>
+            {% else %}<tr><td colspan="5">Nenhuma API configurada.</td></tr>{% endfor %}
+          </tbody>
+          {% else %}
+          <thead><tr><th scope="col">Cliente / instância</th><th scope="col">Perfil / número</th><th scope="col">Status</th><th scope="col">API / caixa</th><th scope="col">Última desconexão</th></tr></thead>
+          <tbody>
+            {% for item in page.rows %}
+            <tr><td><strong>{{ item.client or item.instance or 'Instância' }}</strong>{% if item.client and item.instance %}<br>{{ item.instance }}{% endif %}</td>
+              <td>{{ item.profile or '—' }}{% if item.number %}<br>{{ item.number }}{% endif %}</td>
+              <td class="tv-{{ 'good' if item.status == 'connected' else 'error' if item.status == 'disconnected' else 'warn' }}">{{ item.status_label }}</td>
+              <td>{{ item.source }}{% if item.inbox %}<br>{{ item.inbox }}{% endif %}</td>
+              <td>{{ item.last_disconnect or '—' }}{% if item.disconnect_code %}<br>Código {{ item.disconnect_code }}{% endif %}</td></tr>
+            {% else %}<tr><td colspan="5">Nenhuma instância encontrada.</td></tr>{% endfor %}
+          </tbody>
+          {% endif %}
+        </table>
+      </div>
+      {{ pager(page, 'whatsapp_tv', view, filters if view == 'instancias' else {}) }}
     </section>
     {% endif %}
+    {% endblock %}
   </main>
 </body>
 </html>

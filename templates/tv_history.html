@@ -1,0 +1,71 @@
+{% extends 'tv.html' %}
+{% from '_tv_components.html' import bars %}
+{% block content %}
+<section class="tv-panel" aria-labelledby="tv-history-title">
+  <h2 id="tv-history-title">Histórico CDR</h2>
+  {% if error %}<p class="tv-error" role="alert">{{ error }}</p>{% endif %}
+  {% if cdr_enabled %}
+  <form class="tv-history-form" id="tv-history-query" method="post" action="{{ url_for('pabx.tv_history') }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>De <input type="date" name="start" value="{{ filters.start }}" required></label>
+    <label>Até <input type="date" name="end" value="{{ filters.end }}" required></label>
+    <label>Situação <select name="status"><option value="">Todas</option>
+      {% for status in (result.statuses if result else []) %}<option {% if filters.status == status %}selected{% endif %}>{{ status }}</option>{% endfor %}
+    </select></label>
+    <label>Direção <select name="direction"><option value="">Todas</option>
+      {% for direction in (result.directions if result else []) %}<option {% if filters.direction == direction %}selected{% endif %}>{{ direction }}</option>{% endfor %}
+    </select></label>
+    <label class="tv-checkbox"><input name="recording_only" type="checkbox" value="1" {% if filters.recording_only %}checked{% endif %}> Somente com gravação</label>
+    <div class="tv-form-actions">
+      <button type="submit">Consultar</button>
+      {% if result and page.total %}<button type="submit" name="action" value="export">Exportar CSV</button>{% endif %}
+    </div>
+  </form>
+  {% else %}
+  <p>Disponível após a confirmação do escopo CDR na configuração do PABX.</p>
+  {% endif %}
+</section>
+{% if result %}
+<section class="tv-panel tv-history-result" aria-labelledby="tv-history-result-title">
+  <h2 id="tv-history-result-title">{{ page.total }} {{ 'registro CDR' if page.total == 1 else 'registros CDR' }}</h2>
+  {% if page.total %}
+  <p>{{ status_totals['atendida'] }} atendidos · {{ status_totals['não atendida'] }} não atendidos · IDs repetidos são mantidos.</p>
+  {% if recordings %}
+  <form class="tv-zip" method="post" action="{{ url_for('pabx.recordings_zip') }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% for recording in recordings %}<input type="hidden" name="recording_id" value="{{ recording }}">{% endfor %}
+    <button type="submit">Baixar gravações (ZIP)</button>
+  </form>
+  {% endif %}
+  <div class="tv-columns tv-history-charts">
+    <section class="tv-panel tv-panel-wide"><h3>Registros por situação</h3>{{ bars(status_chart, page.total) }}</section>
+    <section class="tv-panel tv-panel-narrow"><h3>Registros por direção</h3>{{ bars(direction_chart, page.total, 'good') }}</section>
+  </div>
+  <div class="tv-table-wrap" tabindex="0" aria-label="Registros CDR">
+    <table class="tv-table tv-cdr-table">
+      <thead><tr><th scope="col">Data no PABX</th><th scope="col">Identificador CDR</th><th scope="col">Origem</th><th scope="col">Destino</th><th scope="col">Situação</th><th scope="col">Direção</th><th scope="col">Gravação</th></tr></thead>
+      <tbody>
+      {% for row in page.rows %}
+      <tr>
+        <td>{{ row.date or '—' }}</td><td>{{ row.uniqueid or '—' }}{% if row.id_occurrences and row.id_occurrences > 1 %} ({{ row.id_occurrences }}){% endif %}</td>
+        <td>{{ row.source or '—' }}</td><td>{{ row.destination or '—' }}</td><td>{{ row.status or '—' }}</td><td>{{ row.direction or '—' }}</td>
+        <td>{% if row.recording_id %}
+          <a href="{{ url_for('pabx.recording', recording_id=row.recording_id) }}">Ouvir</a> ·
+          <a href="{{ url_for('pabx.recording', recording_id=row.recording_id, download=1) }}">Baixar</a>
+        {% elif row.recording %}Referência disponível{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if page.pages > 1 %}
+  <nav class="tv-pager" aria-label="Paginação do histórico">
+    {% if page.current > 1 %}<button form="tv-history-query" name="pagina" value="{{ page.current - 1 }}">Anterior</button>{% endif %}
+    <span>Página {{ page.current }} de {{ page.pages }}</span>
+    {% if page.current < page.pages %}<button form="tv-history-query" name="pagina" value="{{ page.current + 1 }}">Próxima</button>{% endif %}
+  </nav>
+  {% endif %}
+  {% else %}<p>Nenhum registro para esse período e filtros.</p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

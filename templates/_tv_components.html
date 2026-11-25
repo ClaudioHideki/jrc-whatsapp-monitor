@@ -1,0 +1,19 @@
+{% macro pager(page, endpoint, view, filters={}) %}
+{% if page.pages > 1 %}
+<nav class="tv-pager" aria-label="Paginação">
+  {% if page.current > 1 %}<a href="{{ url_for(endpoint, visao=view, pagina=page.current - 1, **filters) }}">Anterior</a>{% endif %}
+  <span>Página {{ page.current }} de {{ page.pages }}</span>
+  {% if page.current < page.pages %}<a href="{{ url_for(endpoint, visao=view, pagina=page.current + 1, **filters) }}">Próxima</a>{% endif %}
+</nav>
+{% endif %}
+{% endmacro %}
+
+{% macro bars(rows, total, tone='blue') %}
+{% if rows and total %}
+<dl class="tv-chart">
+  {% for label, count in rows %}
+  <div><dt>{{ label }}</dt><dd><span class="tv-chart-track" aria-hidden="true"><span class="tv-fill-{{ tone }}" style="width: {{ (count / total * 100)|round(1) }}%"></span></span><strong>{{ count }}</strong></dd></div>
+  {% endfor %}
+</dl>
+{% else %}<p>Sem registros para exibir.</p>{% endif %}
+{% endmacro %}

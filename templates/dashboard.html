@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>JRC Monitoramento WhatsApp</title>
+  <noscript><meta http-equiv="refresh" content="0;url={{ url_for('whatsapp_tv') }}"></noscript>
+  <script id="tv-fallback" src="{{ url_for('static', filename='tv-fallback.js') }}" data-monitor="whatsapp" data-tv-url="{{ url_for('whatsapp_tv') }}"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
