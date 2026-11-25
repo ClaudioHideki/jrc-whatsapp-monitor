@@ -408,7 +408,10 @@ class PABXMonitor:
             self._history_lock.release()
 
     def recording_url(self, recording_id):
+        return self.recording_urls([recording_id])[0]
+
+    def recording_urls(self, recording_ids):
         cached = self._history_cache
-        if self._stop.is_set() or cached is None or recording_id not in cached[3]:
+        if self._stop.is_set() or cached is None or any(recording_id not in cached[3] for recording_id in recording_ids):
             raise PABXError("recording_missing")
-        return cached[3][recording_id]
+        return [cached[3][recording_id] for recording_id in recording_ids]

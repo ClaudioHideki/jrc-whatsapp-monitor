@@ -33,6 +33,9 @@
     page_limit: "O resultado excedeu o limite de páginas. Reduza o período e consulte novamente.",
     filters: "Informe um período válido de até 31 dias.",
     config_changed: "A configuração mudou durante a consulta. Consulte novamente.",
+    recording_missing: "Consulte o histórico novamente para atualizar as referências das gravações.",
+    recording_selection: "A seleção de gravações para o ZIP é inválida.",
+    csrf: "A sessão do formulário expirou. Recarregue a página.",
   };
   const search = byId("pabx-search");
   const stateFilter = byId("pabx-state");
@@ -204,6 +207,8 @@
   const historyMessage = byId("pabx-history-message");
   const historyResults = byId("pabx-history-results");
   const exportButton = byId("pabx-export");
+  const archiveButton = byId("pabx-recordings-zip");
+  const archiveFrame = byId("pabx-recordings-download");
   const previous = byId("pabx-prev");
   const next = byId("pabx-next");
   const { start, end, status, direction, recording_only: recordingOnly } = historyForm.elements;
@@ -358,13 +363,18 @@
   function controls(busy) {
     pending = busy;
     for (const input of historyForm.elements) input.disabled = busy;
-    exportButton.disabled = busy || !completedFilters || !records.length;
+    updateDownloadButtons();
+  }
+
+  function updateDownloadButtons() {
+    exportButton.disabled = pending || !completedFilters || !records.length;
+    archiveButton.disabled = pending || !completedFilters || !records.some((row) => row.recording_id);
   }
 
   historyForm.addEventListener("change", (event) => {
     if (event.target === recordingOnly && completedFilters) {
       applyRecordingFilter();
-      exportButton.disabled = !records.length;
+      updateDownloadButtons();
       return;
     }
     stopRecording();
@@ -373,7 +383,7 @@
       options(direction, [], "Todas");
     }
     completedFilters = null;
-    exportButton.disabled = true;
+    updateDownloadButtons();
     historyResults.hidden = true;
     historyNotice("Consulte para aplicar os filtros selecionados.");
   });
@@ -425,5 +435,34 @@
     } finally {
       controls(false);
     }
+  });
+
+  archiveFrame.addEventListener("load", () => {
+    try {
+      const error = JSON.parse(archiveFrame.contentDocument?.body?.textContent || "{}").error;
+      if (error) historyNotice(messages[error] || "Falha ao baixar o ZIP de gravações.", true);
+    } catch {
+      // A resposta de download não altera o conteúdo do quadro.
+    }
+  });
+
+  archiveButton.addEventListener("click", () => {
+    if (archiveButton.disabled) return;
+    const ids = [...new Set(records.map((row) => row.recording_id).filter(Boolean))];
+    const form = element("form");
+    form.method = "post";
+    form.action = dashboard.dataset.recordingsZipUrl;
+    form.target = archiveFrame.name;
+    const fields = [["csrf", dashboard.dataset.csrf], ...ids.map((id) => ["recording_id", id])];
+    for (const [name, value] of fields) {
+      const input = element("input");
+      input.type = "hidden";
+      input.name = name;
+      input.value = value;
+      form.append(input);
+    }
+    document.body.append(form);
+    form.submit();
+    form.remove();
   });
 })();

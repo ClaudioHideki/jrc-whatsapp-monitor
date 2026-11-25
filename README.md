@@ -139,6 +139,12 @@ confirmar a consolidação de chamadas, a semântica das durações, o fuso do
 relatório e a validade e renovação do token. A consulta aceita períodos
 de até 31 dias e até 100 páginas. Se o limite for excedido, reduza o período.
 
+**Baixar gravações (ZIP)** inclui os áudios elegíveis dos resultados filtrados
+em todas as páginas. O botão solicita os arquivos por GET somente no clique, e
+o servidor envia o ZIP em fluxo contínuo. Referências iguais entram uma única
+vez. Se um áudio falhar durante a geração, o ZIP inclui `resultado.txt` com
+as gravações afetadas.
+
 ### Coleta local de ramais e filas via HTTP
 
 Na execução restrita ao computador local, `PABX_LOCAL_HTTP_ORIGIN` pode

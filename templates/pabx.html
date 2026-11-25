@@ -24,7 +24,8 @@
 </header>
 <main class="container pabx" data-status-url="{{ url_for('pabx.status') }}" data-revision="{{ revision }}"
       data-cdr-url="{{ url_for('pabx.history') }}" data-export-url="{{ url_for('pabx.export_history') }}"
-      data-recording-url="{{ url_for('pabx.recording', recording_id='RECORDING_ID') }}">
+      data-recording-url="{{ url_for('pabx.recording', recording_id='RECORDING_ID') }}"
+      data-recordings-zip-url="{{ url_for('pabx.recordings_zip') }}" data-csrf="{{ csrf }}">
   {% include "_monitor_nav.html" %}
   <section class="pabx-connection" aria-labelledby="connection-heading">
     <div>
@@ -111,6 +112,7 @@
       <div class="pabx-history-totals">
         <div><strong data-cdr-status="atendida">—</strong> <span>Registros atendidos</span></div>
         <div><strong data-cdr-status="não atendida">—</strong> <span>Registros não atendidos</span></div>
+        <button class="clear-btn" id="pabx-recordings-zip" type="button" disabled>Baixar gravações (ZIP)</button>
       </div>
       <div class="pabx-charts">
         <div><h3>Registros por situação</h3><div id="pabx-status-chart"></div></div>
@@ -128,6 +130,7 @@
         <button type="button" class="clear-btn" id="pabx-next">Próxima</button>
       </div>
     </div>
+    <iframe hidden id="pabx-recordings-download" name="pabx-recordings-download" title="Resultado do download em ZIP"></iframe>
     {% else %}
     <p class="muted">Histórico disponível após a confirmação do escopo CDR na configuração da integração.</p>
     {% endif %}

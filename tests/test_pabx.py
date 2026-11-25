@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import sqlite3
 import tempfile
@@ -10,6 +11,7 @@ from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
+from zipfile import ZipFile
 
 import requests
 from cryptography.fernet import Fernet
@@ -422,6 +424,65 @@ class RouteTests(unittest.TestCase):
             invalid = self.client.post("/api/pabx/cdr", json={**filtered, "recording_only": "true"})
             self.assertEqual(invalid.status_code, 400)
             media.assert_not_called()
+
+    def test_recording_zip_requires_click_selection_and_keeps_audio_scoped(self):
+        self.service.save(PROFILE, 0)
+        self.sign_in()
+        first_url, second_url = (
+            f"{PROFILE.url}/recordings/{name}.mp3" for name in ("first", "second")
+        )
+        self.provider.cdr = [{**CDR[0], "arquivo_audio": first_url}, {**CDR[1], "arquivo_audio": second_url}]
+        zip_url = "/api/pabx/recordings/zip"
+        with patch("pabx_routes.requests.Session") as media:
+            page = self.client.get("/monitoramento-pabx")
+            self.assertIn(b"pabx-recordings-zip", page.data)
+            history = self.client.post("/api/pabx/cdr", json=DATES)
+            ids = [row["recording_id"] for row in history.json["records"]]
+            self.assertTrue(all(ids))
+            self.assertEqual(self.client.post(zip_url, data={"recording_id": ids}).status_code, 403)
+            form = {"csrf": "a" * 64, "recording_id": ids + [ids[0]]}
+            foreign = self.client.post(zip_url, data={**form, "recording_id": ids + ["0" * 64]})
+            self.assertEqual(foreign.status_code, 404)
+            media.assert_not_called()
+
+            upstream = media.return_value.__enter__.return_value.request
+
+            def audio_response(method, url, **kwargs):
+                self.assertEqual(method, "GET")
+                self.assertNotIn("Authorization", kwargs["headers"])
+                self.assertFalse(kwargs["allow_redirects"])
+                self.assertTrue(kwargs["stream"])
+                reply = requests.Response()
+                reply.status_code = 200
+                reply.headers["Content-Type"] = "audio/mpeg"
+                reply._content = b"primeiro" if url == first_url else b"segundo"
+                reply._content_consumed = True
+                return reply
+
+            upstream.side_effect = audio_response
+            archive = self.client.post(zip_url, data=form, buffered=True)
+            self.assertEqual(archive.status_code, 200)
+            self.assertEqual(archive.mimetype, "application/zip")
+            self.assertEqual(archive.headers["Content-Disposition"], 'attachment; filename="gravacoes-pabx.zip"')
+            self.assertEqual(archive.headers["Cache-Control"], "no-store")
+            with ZipFile(io.BytesIO(archive.data)) as tracks:
+                self.assertEqual(tracks.namelist(), ["gravacao-001.mp3", "gravacao-002.mp3"])
+                self.assertEqual(tracks.read("gravacao-001.mp3"), b"primeiro")
+                self.assertEqual(tracks.read("gravacao-002.mp3"), b"segundo")
+            self.assertEqual([call.args[1] for call in upstream.call_args_list], [first_url, second_url])
+            archive.close()
+
+            missing = response(404)
+            missing._content_consumed = True
+            upstream.side_effect = [
+                audio_response("GET", first_url, headers={}, allow_redirects=False, stream=True),
+                missing,
+            ]
+            partial = self.client.post(zip_url, data=form, buffered=True)
+            with ZipFile(io.BytesIO(partial.data)) as tracks:
+                self.assertEqual(tracks.namelist(), ["gravacao-001.mp3", "resultado.txt"])
+                self.assertIn("A gravação 2 não pôde", tracks.read("resultado.txt").decode())
+            partial.close()
 
     def test_customer_change_requires_scope_confirmation_again(self):
         self.service.save(PROFILE, 0)

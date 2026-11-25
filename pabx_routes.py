@@ -5,11 +5,13 @@ import re
 import secrets
 import subprocess
 import threading
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from dataclasses import replace
 from datetime import date
 from functools import wraps
+from itertools import chain
 from urllib.parse import unquote, urlsplit
+from zipfile import ZipFile
 
 import requests
 from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, session, url_for
@@ -40,6 +42,7 @@ ERROR_STATUS = {
     "csrf": 403,
     "recording_missing": 404,
     "recording_range": 416,
+    "recording_selection": 400,
     "timeout": 504,
     "unavailable": 503,
 }
@@ -116,7 +119,7 @@ def cdr_csv(rows):
     )
 
 
-def transcode_wav(upstream, resources):
+def transcode_wav(upstream, resources, strict=False):
     try:
         encoder = resources.enter_context(subprocess.Popen(
             [get_ffmpeg_exe(), "-nostdin", "-loglevel", "error", "-protocol_whitelist", "pipe",
@@ -135,6 +138,7 @@ def transcode_wav(upstream, resources):
             encoder.kill()
 
     resources.callback(stop_encoder)
+    feed_failed = threading.Event()
 
     def feed():
         try:
@@ -142,19 +146,20 @@ def transcode_wav(upstream, resources):
                 for chunk in upstream.iter_content(chunk_size=16 * 1024):
                     input_stream.write(chunk)
         except (OSError, requests.RequestException):
-            return
+            feed_failed.set()
 
     def output():
         threading.Thread(target=feed, name="pabx-recording", daemon=True).start()
         yield from iter(lambda: encoder.stdout.read1(16 * 1024), b"")
+        if strict and (encoder.wait() != 0 or feed_failed.is_set()):
+            raise PABXError("recording_missing")
 
     return output()
 
 
-def stream_recording(url, config):
+def stream_recording(url, config, *, method="GET", requested_range=None, strict=False):
     headers = {"Accept-Encoding": "identity"}
     wav_path = unquote(urlsplit(url).path).lower().endswith(".wav")
-    requested_range = request.headers.get("Range")
     if requested_range is not None:
         if not re.fullmatch(r"bytes=(?:[0-9]{1,16}-[0-9]{0,16}|-[0-9]{1,16})", requested_range):
             raise PABXError("recording_range")
@@ -166,7 +171,7 @@ def stream_recording(url, config):
         client.trust_env = False
         try:
             upstream = stack.enter_context(client.request(
-                request.method, url, headers=headers, stream=True, allow_redirects=False,
+                method, url, headers=headers, stream=True, allow_redirects=False,
                 timeout=config.timeout, verify=config.verify,
             ))
         except requests.Timeout:
@@ -188,7 +193,7 @@ def stream_recording(url, config):
             if upstream.status_code != 200:
                 raise PABXError("recording_missing")
             # A byte range of the WAV cannot serve as a byte range of the converted MP3.
-            body = transcode_wav(upstream, stack) if request.method == "GET" else iter(())
+            body = transcode_wav(upstream, stack, strict) if method == "GET" else iter(())
             response = Response(body, content_type="audio/mpeg", headers=response_headers)
             response.call_on_close(stack.pop_all().close)
             return response
@@ -209,11 +214,67 @@ def stream_recording(url, config):
                 yield from upstream.iter_content(chunk_size=64 * 1024)
             except requests.RequestException:
                 # A closed upstream connection ends the stream without logging its URL.
-                return
+                if strict:
+                    raise PABXError("recording_missing") from None
 
         response = Response(chunks(), status=upstream.status_code, content_type=media, headers=response_headers)
         response.call_on_close(stack.pop_all().close)
         return response
+
+
+class ZipOutput:
+    def __init__(self):
+        self.chunks = []
+
+    def write(self, chunk):
+        if chunk:
+            self.chunks.append(chunk)
+        return len(chunk)
+
+    def flush(self):
+        pass
+
+    def drain(self):
+        chunks, self.chunks = self.chunks, []
+        return chunks
+
+
+def recording_archive(urls, config, is_current):
+    output = ZipOutput()
+    warnings = []
+    with ZipFile(output, "w") as archive:
+        for index, url in enumerate(urls, 1):
+            if not is_current():
+                warnings.append("A configuração mudou. Os arquivos restantes não foram incluídos.")
+                break
+
+            filename = None
+            try:
+                with closing(stream_recording(url, config, strict=True)) as audio:
+                    if audio.status_code != 200:
+                        raise PABXError("recording_missing")
+                    chunks = iter(audio.response)
+                    first = next(chunks, None)
+                    if not first:
+                        raise PABXError("recording_missing")
+                    filename = f"gravacao-{index:03d}.{RECORDING_EXTENSIONS[audio.mimetype]}"
+                    with archive.open(filename, "w", force_zip64=True) as entry:
+                        for chunk in chain((first,), chunks):
+                            entry.write(chunk)
+                            yield from output.drain()
+            except PABXError:
+                warnings.append(
+                    f"{filename} pode estar incompleto." if filename else f"A gravação {index} não pôde ser incluída."
+                )
+            yield from output.drain()
+
+        if warnings:
+            archive.writestr("resultado.txt", "\n".join(warnings) + "\n")
+    yield from output.drain()
+
+
+def valid_csrf(value):
+    return re.fullmatch(r"[a-f0-9]{64}", value) and secrets.compare_digest(value, session.get("pabx_csrf", ""))
 
 
 def register_pabx(app, login_required, login_user, login_password):
@@ -258,6 +319,7 @@ def register_pabx(app, login_required, login_user, login_password):
         return render_template(
             "pabx.html", cdr_enabled=bool(monitor and monitor.client.config.cdr_customer),
             http_mode=profile.url.startswith("http://"), revision=revision,
+            csrf=session.setdefault("pabx_csrf", secrets.token_hex(32)),
         )
 
     @routes.route("/monitoramento-pabx/configuracao", methods=["GET", "POST"])
@@ -279,7 +341,7 @@ def register_pabx(app, login_required, login_user, login_password):
             mode = request.form.get("action")
             try:
                 submitted_csrf = request.form.get("csrf", "")
-                if not re.fullmatch(r"[a-f0-9]{64}", submitted_csrf) or not secrets.compare_digest(csrf, submitted_csrf):
+                if not valid_csrf(submitted_csrf):
                     raise PABXError("csrf")
                 if request.form.get("revision") != str(revision):
                     raise PABXError("config_changed")
@@ -370,7 +432,10 @@ def register_pabx(app, login_required, login_user, login_password):
         _, _, monitor = service.current() if service else (None, 0, None)
         if monitor is None or not re.fullmatch(r"[a-f0-9]{64}", recording_id):
             raise PABXError("recording_missing")
-        result = stream_recording(monitor.recording_url(recording_id), monitor.client.config)
+        result = stream_recording(
+            monitor.recording_url(recording_id), monitor.client.config,
+            method=request.method, requested_range=request.headers.get("Range"),
+        )
         if service.current()[2] is not monitor:
             result.close()
             raise PABXError("config_changed")
@@ -378,5 +443,28 @@ def register_pabx(app, login_required, login_user, login_password):
             extension = RECORDING_EXTENSIONS[result.mimetype]
             result.headers.set("Content-Disposition", "attachment", filename=f"gravacao-pabx.{extension}")
         return result
+
+    @routes.post("/api/pabx/recordings/zip")
+    @api_auth
+    def recordings_zip():
+        _, _, monitor = service.current() if service else (None, 0, None)
+        if monitor is None or not monitor.client.config.cdr_customer:
+            raise PABXError("cdr_disabled")
+        if not 0 < (request.content_length or 0) <= 96000:
+            raise PABXError("recording_selection")
+        if not valid_csrf(request.form.get("csrf", "")):
+            raise PABXError("csrf")
+        ids = request.form.getlist("recording_id")
+        if not 1 <= len(ids) <= 1000 or any(not re.fullmatch(r"[a-f0-9]{64}", value) for value in ids):
+            raise PABXError("recording_selection")
+
+        urls = monitor.recording_urls(dict.fromkeys(ids))
+        if service.current()[2] is not monitor:
+            raise PABXError("config_changed")
+        return Response(
+            recording_archive(urls, monitor.client.config, lambda: service.current()[2] is monitor),
+            content_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="gravacoes-pabx.zip"'},
+        )
 
     app.register_blueprint(routes)
