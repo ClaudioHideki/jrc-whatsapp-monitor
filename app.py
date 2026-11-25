@@ -2,6 +2,7 @@ import os
 import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import requests
@@ -182,6 +183,9 @@ def login():
             session.clear()
             session["authenticated"] = True
             session["username"] = username
+            tv = request.args.get("tv")
+            if tv in ("whatsapp", "pabx"):
+                return redirect(url_for("whatsapp_tv" if tv == "whatsapp" else "pabx.tv"))
             return redirect(url_for("dashboard"))
         return render_template("login.html", error="Usuário ou senha inválidos."), 401
     return render_template("login.html", error=None)
@@ -196,6 +200,18 @@ def dashboard():
     if not login_required():
         return redirect(url_for("login"))
     return render_template("dashboard.html", username=session.get("username", ""))
+
+@app.get("/tv")
+def whatsapp_tv():
+    if not login_required():
+        return redirect(url_for("login", tv="whatsapp"))
+    snapshot = get_monitor_data()
+    attention = [instance for instance in snapshot["instances"] if instance["status"] != "connected"]
+    attention.sort(key=lambda instance: instance["status"] != "disconnected")
+    return render_template(
+        "tv.html", mode="whatsapp", refresh=60, indicators=snapshot["summary"],
+        snapshot=snapshot, attention=attention, updated=datetime.fromtimestamp(snapshot["generated_at"], timezone.utc),
+    ), 200, {"Cache-Control": "no-store"}
 
 @app.route("/api/status", methods=["GET"])
 def api_status():

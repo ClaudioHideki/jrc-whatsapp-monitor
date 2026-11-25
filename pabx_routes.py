@@ -8,7 +8,7 @@ import threading
 from collections import Counter
 from contextlib import ExitStack, closing
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime
 from functools import wraps
 from itertools import chain
 from urllib.parse import unquote, urlsplit
@@ -420,17 +420,39 @@ def register_pabx(app, login_required, login_user, login_password):
             allowed_http=allowed_http, fixed=fixed,
         )
 
-    @routes.get("/api/pabx/status")
-    @api_auth
-    def status():
+    def status_snapshot():
         profile, revision, monitor = service.current() if service else (PABXProfile(), 0, None)
         if monitor is None:
             state = config_error or ("scope_pending" if profile.enabled else "disabled")
             if service and profile.enabled and not service.transport_allowed(profile):
                 state = "http_origin"
-            return jsonify(state=state, last_success=None, collecting=False,
-                           stale=False, data=None, poll_seconds=10, company=profile.company, revision=revision)
-        return jsonify(company=profile.company, revision=revision, **monitor.snapshot())
+            return dict(state=state, last_success=None, collecting=False,
+                        stale=False, data=None, poll_seconds=10, company=profile.company, revision=revision)
+        return dict(company=profile.company, revision=revision, **monitor.snapshot())
+
+    @routes.get("/api/pabx/status")
+    @api_auth
+    def status():
+        return jsonify(status_snapshot())
+
+    @routes.get("/tv/pabx")
+    def tv():
+        if not login_required():
+            return redirect(url_for("login", tv="pabx"))
+        if not authorized():
+            return redirect(url_for("dashboard"))
+        snapshot = status_snapshot()
+        states = {
+            "connected": "API conectada.", "starting": "Aguardando a primeira coleta.",
+            "disabled": "Monitoramento desativado.", "scope_pending": "Confirme o escopo do monitoramento.",
+        }
+        data = snapshot["data"] or {}
+        return render_template(
+            "tv.html", mode="pabx", refresh=15, indicators=data.get("indicators", {}),
+            snapshot=snapshot, queues=data.get("queues", []),
+            connection=states.get(snapshot["state"]) or ADMIN_MESSAGES.get(snapshot["state"], "Falha ao consultar o PABX."),
+            updated=datetime.fromisoformat(snapshot["last_success"]) if snapshot["last_success"] else None,
+        )
 
     @routes.post("/api/pabx/cdr")
     @routes.post("/api/pabx/cdr/export", endpoint="export_history", defaults={"export": True})

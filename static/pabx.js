@@ -41,6 +41,10 @@
   const search = byId("pabx-search");
   const stateFilter = byId("pabx-state");
   const queueFilter = byId("pabx-queue");
+  const extensionPrevious = byId("pabx-extension-prev");
+  const extensionNext = byId("pabx-extension-next");
+  const extensionsPerPage = 10;
+  let extensionPage = 1;
   let snapshot;
   let lastRendered = null;
 
@@ -73,6 +77,80 @@
     return "Pausa não informada";
   }
 
+  function renderDistribution(id, categories, total) {
+    const container = byId(id);
+    if (!total) {
+      const empty = element("p", total === 0 ? "Nenhum ramal encontrado." : "Aguardando dados de ramais.");
+      empty.className = "muted";
+      container.replaceChildren(empty);
+      return;
+    }
+
+    const bar = element("div");
+    bar.className = "pabx-distribution";
+    bar.setAttribute("aria-hidden", "true");
+    const legend = element("dl");
+    legend.className = "pabx-chart-legend";
+    for (const [label, tone, count] of categories) {
+      if (count > 0) {
+        const segment = element("span");
+        segment.dataset.tone = tone;
+        segment.style.flexGrow = count;
+        bar.append(segment);
+      }
+      const row = element("div");
+      row.dataset.tone = tone;
+      row.append(element("dt", label), element("dd", formatCount.format(count)));
+      legend.append(row);
+    }
+    container.replaceChildren(bar, legend);
+  }
+
+  function renderOperationalCharts(extensions) {
+    const states = new Map();
+    let registered = 0;
+    let unregistered = 0;
+    for (const row of extensions || []) {
+      states.set(row.status, (states.get(row.status) || 0) + 1);
+      if (row.registered === true) registered += 1;
+      if (row.registered === false) unregistered += 1;
+    }
+    const total = extensions?.length;
+    const categories = [
+      ["available", "Livres", "green"], ["busy", "Ocupados", "orange"],
+      ["ringing", "Tocando", "amber"], ["registered", "Registrados sem estado de chamada", "cyan"],
+      ["unregistered", "Não registrados", "red"], ["unknown", "Estado indefinido", "neutral"],
+    ];
+    renderDistribution("pabx-extension-chart", categories.map(([key, label, tone]) => [label, tone, states.get(key) || 0]), total);
+    renderDistribution("pabx-registration-chart", [
+      ["Registrados", "green", registered], ["Não registrados", "red", unregistered],
+      ["Registro não informado", "neutral", (total || 0) - registered - unregistered],
+    ], total);
+  }
+
+  function extensionQueues(queues, opened) {
+    if (!queues.length) return cell("");
+    const td = element("td");
+    const details = element("details");
+    details.open = opened;
+    const summary = element("summary");
+    const preview = element("span");
+    preview.className = "pabx-extension-queue-preview";
+    const firstName = element("span", queues[0].name);
+    firstName.title = queues[0].name;
+    preview.append(firstName);
+    if (queues.length > 1) {
+      const extra = element("small", `+${formatCount.format(queues.length - 1)}`);
+      preview.append(extra);
+    }
+    summary.append(preview);
+    const list = element("ul");
+    for (const queue of queues) list.append(element("li", `${queue.name} (${pauseLabel(queue.paused)})`));
+    details.append(summary, list);
+    td.append(details);
+    return td;
+  }
+
   function renderExtensions() {
     const term = search.value.trim().toLocaleLowerCase("pt-BR");
     const state = stateFilter.value;
@@ -84,28 +162,60 @@
         (!queueFilter.value || row.queues.some((queue) => queue.code === queueFilter.value)) &&
         (!term || `${row.extension} ${row.name}`.toLocaleLowerCase("pt-BR").includes(term));
     });
+    const pageCount = Math.ceil(rows.length / extensionsPerPage);
+    extensionPage = Math.min(extensionPage, pageCount || 1);
+    const start = (extensionPage - 1) * extensionsPerPage;
+    const visibleRows = rows.slice(start, start + extensionsPerPage);
+    const tbody = byId("pabx-extensions");
+    const opened = new Set([...tbody.querySelectorAll("details[open]")].map((details) => details.closest("tr").dataset.extension));
     const fragment = document.createDocumentFragment();
-    for (const row of rows) {
+    for (const row of visibleRows) {
       const tr = element("tr");
+      tr.dataset.extension = JSON.stringify([row.extension, row.name]);
       const stateCell = element("td");
       stateCell.append(statusBadge(row.status));
-      if (row.in_call) stateCell.append(" · ", statusBadge("in_call"));
+      if (row.in_call) stateCell.append(statusBadge("in_call"));
       const registration = row.registered == null ? "" : row.registered ? "Registrado" : "Não registrado";
-      const queues = row.queues.map((queue) => `${queue.name} (${pauseLabel(queue.paused)})`).join(", ");
-      tr.append(cell(row.extension), cell(row.name), stateCell, cell(registration), cell(queues));
+      tr.append(cell(row.extension), cell(row.name), stateCell, cell(registration), extensionQueues(row.queues, opened.has(tr.dataset.extension)));
       fragment.append(tr);
     }
-    byId("pabx-extensions").replaceChildren(fragment);
+    tbody.replaceChildren(fragment);
     let countMessage = "Aguardando dados de ramais.";
     if (extensions) {
-      if (rows.length) countMessage = `${formatCount.format(rows.length)} ramais exibidos.`;
-      else if (state === "in_call" && snapshot.data.indicators.extensions_in_call == null) {
+      if (rows.length) {
+        const count = formatCount.format(rows.length);
+        countMessage = pageCount > 1
+          ? `${formatCount.format(start + 1)}–${formatCount.format(start + visibleRows.length)} de ${count} ramais.`
+          : `${count} ${rows.length === 1 ? "ramal encontrado" : "ramais encontrados"}.`;
+      } else if (state === "in_call" && snapshot.data.indicators.extensions_in_call == null) {
         countMessage = "A API ainda não informou os ramais em ligação.";
       } else if (state === "in_call" && !term && !queueFilter.value) {
         countMessage = "Nenhum ramal em ligação identificado nesta coleta.";
       } else countMessage = "Nenhum ramal encontrado para os filtros selecionados.";
     }
     byId("pabx-extension-count").textContent = countMessage;
+    byId("pabx-extension-pagination").hidden = pageCount < 2;
+    byId("pabx-extension-page").textContent = pageCount > 1 ? `Página ${extensionPage} de ${pageCount}` : "";
+    extensionPrevious.disabled = extensionPage <= 1;
+    extensionNext.disabled = extensionPage >= pageCount;
+  }
+
+  function queueMembers(members) {
+    const list = element("ul");
+    list.className = "pabx-queue-members";
+    for (const member of members) {
+      const row = element("li");
+      const name = element("strong", member.name || "Nome não informado");
+      const meta = element("div");
+      meta.className = "pabx-queue-member-meta";
+      meta.append(element("span", member.extension ? `Ramal ${member.extension}` : "Ramal não identificado"));
+      meta.append(statusBadge(member.status));
+      if (member.in_call) meta.append(statusBadge("in_call"));
+      meta.append(element("span", pauseLabel(member.paused)));
+      row.append(name, meta);
+      list.append(row);
+    }
+    return list;
   }
 
   function renderQueues(queues) {
@@ -116,32 +226,30 @@
       return;
     }
     const fragment = document.createDocumentFragment();
+    const visibleMembers = 4;
     for (const queue of queues) {
-      const details = element("details");
-      details.className = "pabx-queue";
-      details.dataset.code = queue.code;
-      details.open = opened.has(queue.code);
-      const summary = element("summary", queue.name);
-      const context = element("span", [
-        `${formatCount.format(queue.members.length)} membros`,
+      const card = element("section");
+      card.className = "pabx-queue";
+      const count = queue.members.length;
+      const context = element("p", [
+        `${formatCount.format(count)} ${count === 1 ? "membro" : "membros"}`,
         queue.strategy, queue.monitored ? "Presente no painel operacional" : "Sem dados no painel operacional",
       ].filter(Boolean).join(" · "));
       context.className = "muted";
-      summary.append(" ", context);
-      details.append(summary);
-      if (queue.members.length) {
-        const list = element("ul");
-        for (const member of queue.members) {
-          const identity = [member.extension, member.name].filter(Boolean).join(" · ") || "Ramal não identificado";
-          const row = element("li", `${identity} · `);
-          row.append(statusBadge(member.status));
-          if (member.in_call) row.append(" · ", statusBadge("in_call"));
-          row.append(` · ${pauseLabel(member.paused)}`);
-          list.append(row);
-        }
-        details.append(list);
+      card.append(element("h3", queue.name), context);
+      if (count) card.append(queueMembers(queue.members.slice(0, visibleMembers)));
+      if (count > visibleMembers) {
+        const details = element("details");
+        details.dataset.code = queue.code;
+        details.open = opened.has(queue.code);
+        const remaining = count - visibleMembers;
+        details.append(
+          element("summary", `Ver mais ${formatCount.format(remaining)} ${remaining === 1 ? "membro" : "membros"}`),
+          queueMembers(queue.members.slice(visibleMembers)),
+        );
+        card.append(details);
       }
-      fragment.append(details);
+      fragment.append(card);
     }
     container.replaceChildren(fragment);
   }
@@ -171,6 +279,7 @@
       indicator.textContent = value == null ? "—" : formatCount.format(value);
     }
     options(queueFilter, (data?.queues || []).map((queue) => [queue.code, queue.name]), "Todas as filas");
+    renderOperationalCharts(data?.extensions);
     renderExtensions();
     renderQueues(data?.queues);
   }
@@ -196,9 +305,16 @@
     window.setTimeout(poll, 1000 * (snapshot?.poll_seconds || 5));
   }
 
-  search.addEventListener("input", renderExtensions);
-  stateFilter.addEventListener("change", renderExtensions);
-  queueFilter.addEventListener("change", renderExtensions);
+  function filterExtensions() {
+    extensionPage = 1;
+    renderExtensions();
+  }
+
+  search.addEventListener("input", filterExtensions);
+  stateFilter.addEventListener("change", filterExtensions);
+  queueFilter.addEventListener("change", filterExtensions);
+  extensionPrevious.addEventListener("click", () => { extensionPage -= 1; renderExtensions(); });
+  extensionNext.addEventListener("click", () => { extensionPage += 1; renderExtensions(); });
   renderExtensions();
   renderQueues();
   poll();

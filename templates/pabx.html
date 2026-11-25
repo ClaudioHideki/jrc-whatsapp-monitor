@@ -17,6 +17,7 @@
     </div>
   </div>
   <div class="actions">
+    <a href="{{ url_for('pabx.tv') }}" class="top-link">Modo TV</a>
     <button id="theme-btn" class="top-btn" type="button">🌙 Escuro</button>
     <a href="{{ url_for('pabx.settings') }}" class="top-link">Configuração</a>
     <a href="{{ url_for('logout') }}" class="top-link">Sair</a>
@@ -48,18 +49,28 @@
     </div>
     <div class="summary-grid pabx-summary">
       {% set indicators = [
-        ('total', 'Ramais'), ('queues', 'Filas'),
-        ('active_calls', 'Chamadas ativas'), ('extensions_in_call', 'Ramais em ligação'),
-        ('available', 'Livres'), ('busy', 'Ocupados'),
-        ('ringing', 'Tocando'), ('registered', 'Registrados'),
-        ('unregistered', 'Não registrados'), ('unknown', 'Estado indefinido')
+        ('total', 'Ramais', 'blue'), ('queues', 'Filas', 'violet'),
+        ('active_calls', 'Chamadas ativas', 'cyan'), ('extensions_in_call', 'Ramais em ligação', 'cyan'),
+        ('available', 'Livres', 'green'), ('busy', 'Ocupados', 'orange'),
+        ('ringing', 'Tocando', 'amber'), ('registered', 'Registrados', 'green'),
+        ('unregistered', 'Não registrados', 'red'), ('unknown', 'Estado indefinido', 'neutral')
       ] %}
-      {% for key, title in indicators %}
-      <div class="summary-card">
+      {% for key, title, tone in indicators %}
+      <div class="summary-card" data-tone="{{ tone }}">
         <div class="summary-label">{{ title }}</div>
         <div class="summary-value" data-indicator="{{ key }}">—</div>
       </div>
       {% endfor %}
+    </div>
+    <div class="pabx-overview-charts">
+      <section class="pabx-panel pabx-operational-chart" aria-labelledby="state-chart-title">
+        <h3 id="state-chart-title">Estado dos ramais</h3>
+        <div id="pabx-extension-chart"><p class="muted">Aguardando dados de ramais.</p></div>
+      </section>
+      <section class="pabx-panel pabx-operational-chart" aria-labelledby="registration-chart-title">
+        <h3 id="registration-chart-title">Registro dos ramais</h3>
+        <div id="pabx-registration-chart"><p class="muted">Aguardando dados de ramais.</p></div>
+      </section>
     </div>
   </section>
 
@@ -83,10 +94,15 @@
     </div>
     <p id="pabx-extension-count" class="muted" role="status"></p>
     <div class="pabx-table-wrap" tabindex="0" aria-label="Tabela de ramais">
-      <table class="client-table pabx-table">
+      <table class="client-table pabx-table pabx-extension-table">
         <thead><tr><th scope="col">Ramal</th><th scope="col">Nome cadastrado</th><th scope="col">Estado</th><th scope="col">Registro</th><th scope="col">Filas</th></tr></thead>
         <tbody id="pabx-extensions"></tbody>
       </table>
+    </div>
+    <div class="pabx-pagination" id="pabx-extension-pagination" role="group" aria-label="Paginação dos ramais" hidden>
+      <button type="button" class="clear-btn" id="pabx-extension-prev" aria-controls="pabx-extensions">Anterior</button>
+      <span id="pabx-extension-page" aria-live="polite"></span>
+      <button type="button" class="clear-btn" id="pabx-extension-next" aria-controls="pabx-extensions">Próxima</button>
     </div>
   </section>
 

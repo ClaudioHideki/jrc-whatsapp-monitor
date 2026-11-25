@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="{{ refresh }}">
+  <title>{{ 'PABX' if mode == 'pabx' else 'WhatsApp' }} | JRC Modo TV</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='tv.css') }}">
+</head>
+<body class="tv">
+  <header class="tv-header">
+    <div class="tv-brand">
+      <img src="{{ url_for('static', filename='OPERADORA.jpeg') }}" alt="JRC">
+      <h1>{{ 'Monitoramento PABX' if mode == 'pabx' else 'Monitoramento WhatsApp' }}</h1>
+    </div>
+    <nav class="tv-nav" aria-label="Áreas de monitoramento">
+      <a href="{{ url_for('whatsapp_tv') }}" {% if mode == 'whatsapp' %}aria-current="page"{% endif %}>WhatsApp</a>
+      <a href="{{ url_for('pabx.tv') }}" {% if mode == 'pabx' %}aria-current="page"{% endif %}>PABX</a>
+      <a href="{{ url_for('pabx.page' if mode == 'pabx' else 'dashboard') }}">Painel completo</a>
+    </nav>
+  </header>
+  <main class="tv-main">
+    <div class="tv-meta">
+      {% if mode == 'pabx' %}
+      <span>{{ snapshot.company }}</span>
+      <strong class="{% if snapshot.stale or snapshot.state != 'connected' %}tv-warn{% else %}tv-good{% endif %}">
+        {{ connection }}{% if snapshot.stale %} Dados da última coleta válida.{% endif %}
+      </strong>
+      {% endif %}
+      <span>Última {{ 'coleta' if mode == 'pabx' else 'atualização' }}
+        <strong>{{ updated.strftime('%H:%M:%S UTC') if updated else '—' }}</strong> · Atualiza a cada {{ refresh }} s
+      </span>
+    </div>
+
+    {% if mode == 'pabx' %}
+      {% set cards = [('total', 'Ramais', 'blue'), ('active_calls', 'Chamadas ativas', 'blue'),
+        ('available', 'Livres', 'good'), ('busy', 'Ocupados', 'warn'), ('ringing', 'Tocando', 'warn'),
+        ('unregistered', 'Não registrados', 'error')] %}
+    {% else %}
+      {% set cards = [('total', 'Instâncias', 'blue'), ('connected', 'Conectadas', 'good'),
+        ('connecting', 'Conectando', 'warn'), ('disconnected', 'Desconectadas', 'error'),
+        ('unknown', 'Desconhecidas', 'neutral'), ('apis_unavailable', 'APIs indisponíveis', 'error')] %}
+    {% endif %}
+    <section class="tv-kpis" aria-label="Indicadores">
+      {% for key, label, tone in cards %}
+      {% set value = indicators.get(key) %}
+      <article class="tv-kpi tv-accent-{{ tone }}">
+        <span>{{ label }}</span>
+        <strong data-indicator="{{ key }}">{{ '—' if value is none else value }}</strong>
+      </article>
+      {% endfor %}
+    </section>
+
+    {% if mode == 'whatsapp' %}
+    <div class="tv-columns">
+      <section class="tv-panel tv-panel-wide" aria-labelledby="attention-title">
+        <h2 id="attention-title">Instâncias que precisam de atenção</h2>
+        {% if attention %}
+        <ul class="tv-list">
+          {% for item in attention[:5] %}
+          <li>
+            <div class="tv-identity">
+              <strong>{{ item.client or item.profile or item.instance or 'Instância' }}</strong>
+              <span>{{ item.source }}{% if item.inbox %} · {{ item.inbox }}{% endif %}</span>
+            </div>
+            <span class="tv-{{ 'error' if item.status == 'disconnected' else 'warn' }}">{{ item.status_label }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% if attention|length > 5 %}<p>+ {{ attention|length - 5 }} no painel completo</p>{% endif %}
+        {% elif snapshot.summary.total %}
+        <p>Todas as instâncias retornadas estão conectadas.</p>
+        {% else %}
+        <p>Nenhuma instância retornada nesta atualização.</p>
+        {% endif %}
+      </section>
+      <section class="tv-panel tv-panel-narrow" aria-labelledby="sources-title">
+        <h2 id="sources-title">APIs WhatsApp</h2>
+        {% if snapshot.sources %}
+        <ul class="tv-list">
+          {% for source in (snapshot.sources|sort(attribute='online'))[:5] %}
+          <li><strong>{{ source.name }}</strong><span class="tv-{{ 'good' if source.online else 'error' }}">{{ 'Online' if source.online else 'Indisponível' }}</span></li>
+          {% endfor %}
+        </ul>
+        {% if snapshot.sources|length > 5 %}<p>+ {{ snapshot.sources|length - 5 }} no painel completo</p>{% endif %}
+        {% else %}<p>Nenhuma API configurada.</p>{% endif %}
+      </section>
+    </div>
+    {% else %}
+    <section class="tv-panel" aria-labelledby="queues-title">
+      <h2 id="queues-title">Atendentes por fila</h2>
+      {% if queues %}
+      <ul class="tv-list tv-queues">
+        {% for queue in queues[:5] %}
+        <li>
+          <div class="tv-identity">
+            <strong>{{ queue.name }}</strong>
+            <span>{% for member in queue.members[:4] %}{{ member.name or member.extension or 'Nome não informado' }}{{ ' · ' if not loop.last }}{% else %}Sem membros{% endfor %}
+              {% if queue.members|length > 4 %} · +{{ queue.members|length - 4 }}{% endif %}
+            </span>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% if queues|length > 5 %}<p>+ {{ queues|length - 5 }} filas no painel completo</p>{% endif %}
+      {% else %}<p>{{ 'Nenhuma fila cadastrada.' if snapshot.data else 'Aguardando dados de filas.' }}</p>{% endif %}
+    </section>
+    {% endif %}
+  </main>
+</body>
+</html>

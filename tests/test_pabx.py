@@ -388,7 +388,7 @@ class RouteTests(unittest.TestCase):
         self.addCleanup(self.stop)
         app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / "templates"))
         app.secret_key = "test-secret-for-local-exercise-with-entropy"
-        for endpoint in ("login", "dashboard", "logout"):
+        for endpoint in ("login", "dashboard", "logout", "whatsapp_tv"):
             app.add_url_rule(f"/{endpoint}", endpoint, lambda: "")
         with patch.object(PABXService, "from_env", return_value=self.service):
             register_pabx(app, lambda: session.get("authenticated") is True, "admin", "test-local-password")
@@ -401,6 +401,25 @@ class RouteTests(unittest.TestCase):
     def sign_in(self, username="admin"):
         with self.client.session_transaction() as state:
             state.update(authenticated=True, username=username, pabx_csrf="a" * 64)
+
+    def test_pabx_tv_requires_admin_and_renders_collected_names_without_javascript(self):
+        path = "/tv/pabx"
+        self.assertEqual(self.client.get(path).location, "/login?tv=pabx")
+        self.sign_in("viewer")
+        self.assertEqual(self.client.get(path).location, "/dashboard")
+        self.sign_in()
+        monitor = PABXMonitor(PABXClient(CONFIG, self.provider))
+        monitor._collect()
+        with patch.object(self.service, "current", return_value=(PROFILE, 1, monitor)):
+            result = self.client.get(path)
+
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.headers["Cache-Control"], "no-store")
+        self.assertIn(b'http-equiv="refresh" content="15"', result.data)
+        self.assertIn(b"Ana Teste", result.data)
+        self.assertIn(b"Suporte teste", result.data)
+        self.assertNotIn(b"<script", result.data)
+        self.assertNotIn(PROFILE.password.encode(), result.data)
 
     def test_dokploy_http_profile_is_fixed_for_remote_admin(self):
         fixed = PABXProfile(company="JRC", url=HTTP_ORIGIN, account="demo", interval=15, cdr_customer="55")
@@ -748,6 +767,34 @@ class RouteTests(unittest.TestCase):
 
 
 class WhatsAppTests(unittest.TestCase):
+    def test_whatsapp_tv_keeps_login_and_renders_status_without_javascript(self):
+        import app as module
+
+        client = module.app.test_client()
+        data = {
+            "summary": {"total": 1, "connected": 0, "connecting": 0, "disconnected": 1,
+                        "unknown": 0, "apis_unavailable": 0},
+            "generated_at": 1795608000, "sources": [{"name": "API teste", "online": True}],
+            "instances": [{"client": "Cliente teste", "status": "disconnected", "status_label": "Desconectado",
+                           "source": "API teste", "inbox": "Atendimento"}],
+        }
+        with patch.multiple(module, LOGIN_CONFIGURED=True, LOGIN_USER="demo", LOGIN_PASSWORD="fixture-pass"), patch.object(
+            module, "get_monitor_data", return_value=data,
+        ) as provider:
+            self.assertEqual(client.get("/tv").location, "/login?tv=whatsapp")
+            provider.assert_not_called()
+            login = client.post("/login?tv=whatsapp", data={"username": "demo", "password": "fixture-pass"})
+            self.assertEqual(login.location, "/tv")
+            result = client.get("/tv")
+            provider.assert_called_once()
+
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.headers["Cache-Control"], "no-store")
+        self.assertIn(b'http-equiv="refresh" content="60"', result.data)
+        self.assertIn(b"Cliente teste", result.data)
+        self.assertIn(b"Desconectado", result.data)
+        self.assertNotIn(b"<script", result.data)
+
     def test_login_rejects_public_default_password_or_session_key(self):
         import runpy
 
