@@ -74,6 +74,7 @@ html[data-theme="dark"] .pabx label input, html[data-theme="dark"] .pabx label s
 .pabx-table-wrap { overflow: auto; margin-top: 12px; border: 1px solid var(--border); border-radius: 9px; }
 .pabx-table { min-width: 590px; table-layout: auto; }
 .pabx-cdr-table { min-width: 850px; }
+.pabx-recording-actions { display: flex; gap: 6px; white-space: nowrap; }
 .pabx-recording { display: block; width: min(100%, 235px); min-width: 145px; margin-top: 6px; height: 32px; }
 .pabx-table tr :is(th, td):nth-child(n) { width: auto; overflow-wrap: anywhere; }
 .pabx-table td:first-child { font-weight: 700; }

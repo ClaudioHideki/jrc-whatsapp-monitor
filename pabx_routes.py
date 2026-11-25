@@ -45,7 +45,12 @@ ERROR_STATUS = {
 }
 
 WAV_TYPES = frozenset(("audio/wav", "audio/x-wav", "audio/wave"))
-RECORDING_TYPES = WAV_TYPES | {"audio/mpeg", "audio/ogg", "audio/mp4"}
+RECORDING_EXTENSIONS = {
+    **dict.fromkeys(WAV_TYPES, "wav"),
+    "audio/mpeg": "mp3",
+    "audio/ogg": "ogg",
+    "audio/mp4": "m4a",
+}
 
 ADMIN_MESSAGES = {
     "storage_setup": "Configure a chave de criptografia do PABX e o caminho do banco no servidor.",
@@ -169,7 +174,7 @@ def stream_recording(url, config):
         media = upstream.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
         if upstream.status_code == 416:
             raise PABXError("recording_range")
-        if upstream.status_code not in (200, 206) or media not in RECORDING_TYPES:
+        if upstream.status_code not in (200, 206) or media not in RECORDING_EXTENSIONS:
             raise PABXError("recording_missing")
 
         response_headers = {
@@ -365,6 +370,9 @@ def register_pabx(app, login_required, login_user, login_password):
         if service.current()[2] is not monitor:
             result.close()
             raise PABXError("config_changed")
+        if request.args.get("download") == "1":
+            extension = RECORDING_EXTENSIONS[result.mimetype]
+            result.headers.set("Content-Disposition", "attachment", filename=f"gravacao-pabx.{extension}")
         return result
 
     app.register_blueprint(routes)

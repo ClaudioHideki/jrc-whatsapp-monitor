@@ -130,9 +130,9 @@ em uma fila são exibidos em colunas distintas.
 O CDR apresenta uma linha por registro, inclusive quando o `uniqueid` se
 repete. Gráficos, filtros e exportação CSV usam essa unidade de contagem.
 Origem e destino são mascarados. As gravações elegíveis da mesma origem
-podem ser ouvidas no painel. O áudio é solicitado por GET somente ao clicar
-em **Ouvir gravação**. O servidor converte WAV para MP3 durante a reprodução
-sem criar um arquivo local, inclusive para WAV com áudio GSM. A URL original
+podem ser ouvidas ou baixadas. O áudio é solicitado por GET somente ao clicar
+em **Ouvir gravação** ou **Baixar gravação**. O servidor converte WAV para MP3
+em trânsito, inclusive para WAV com áudio GSM. A URL original
 fica no servidor. A homologação precisa
 confirmar a consolidação de chamadas, a semântica das durações, o fuso do
 relatório e a validade e renovação do token. A consulta aceita períodos

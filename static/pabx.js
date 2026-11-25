@@ -241,6 +241,9 @@
   function recordingCell(record) {
     if (!record.recording_id) return cell(record.recording ? "Referência disponível" : "");
     const container = element("td");
+    const actions = element("div");
+    actions.className = "pabx-recording-actions";
+    const recordingUrl = dashboard.dataset.recordingUrl.replace("RECORDING_ID", record.recording_id);
     const button = element("button", "Ouvir gravação");
     button.type = "button";
     button.className = "clear-btn";
@@ -253,7 +256,7 @@
       player.preload = "none";
       player.setAttribute("controlslist", "nodownload");
       player.setAttribute("aria-label", "Gravação da chamada");
-      player.src = dashboard.dataset.recordingUrl.replace("RECORDING_ID", record.recording_id);
+      player.src = recordingUrl;
       player.addEventListener("error", () => {
         if (activeRecording === player) {
           stopRecording();
@@ -264,7 +267,18 @@
       container.append(player);
       player.play().catch(() => {});
     });
-    container.append(button);
+
+    const download = element("button", "Baixar gravação");
+    download.type = "button";
+    download.className = "clear-btn";
+    download.addEventListener("click", () => {
+      const link = element("a");
+      link.href = recordingUrl + "?download=1";
+      link.download = "";
+      link.click();
+    });
+    actions.append(button, download);
+    container.append(actions);
     return container;
   }
 

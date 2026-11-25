@@ -478,6 +478,7 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(audio.status_code, 206)
             self.assertEqual(audio.get_data(), b"RI")
             self.assertEqual(audio.headers["Content-Range"], "bytes 0-1/10")
+            self.assertNotIn("Content-Disposition", audio.headers)
             self.assertEqual(session.request.call_args.args, ("GET", local_audio))
             self.assertEqual(session.request.call_args.kwargs["headers"]["Range"], "bytes=0-1")
             self.assertNotIn("Authorization", session.request.call_args.kwargs["headers"])
@@ -491,7 +492,7 @@ class RouteTests(unittest.TestCase):
             session.request.return_value = upstream
             wav_id = rows[3]["recording_id"]
             self.assertNotIn(wav_audio, report.get_data(as_text=True))
-            with patch("pabx_routes.transcode_wav", return_value=iter([b"ID3"])) as convert:
+            with patch("pabx_routes.transcode_wav", side_effect=lambda *_: iter([b"ID3"])) as convert:
                 head = self.client.head(f"/api/pabx/recordings/{wav_id}")
                 self.assertEqual(head.mimetype, "audio/mpeg")
                 self.assertEqual(head.get_data(), b"")
@@ -505,6 +506,15 @@ class RouteTests(unittest.TestCase):
                 self.assertNotIn("Range", session.request.call_args.kwargs["headers"])
                 convert.assert_called_once()
                 audio.close()
+
+                download = self.client.get(f"/api/pabx/recordings/{wav_id}?download=1", buffered=True)
+                self.assertEqual(download.status_code, 200)
+                self.assertEqual(download.mimetype, "audio/mpeg")
+                self.assertEqual(download.headers["Content-Disposition"], "attachment; filename=gravacao-pabx.mp3")
+                self.assertEqual(download.headers["Cache-Control"], "no-store")
+                self.assertEqual(download.get_data(), b"ID3")
+                self.assertEqual(session.request.call_args.args, ("GET", wav_audio))
+                download.close()
 
 
 class WhatsAppTests(unittest.TestCase):
