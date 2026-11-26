@@ -98,14 +98,15 @@
 .tv-extension {
   display: inline-block;
   vertical-align: top;
-  width: 24%;
-  margin: 0 .5% 8px;
-  padding: 6px 8px;
+  width: 15.66%;
+  min-width: 0;
+  margin: 0 .5% 5px;
+  padding: 4px 7px;
   border: 1px solid #bccbdb;
   border-left: 4px solid #485e76;
   border-radius: 6px;
   background: #f7f9fc;
-  font-size: 16px;
+  font-size: 13px;
   line-height: 1.2;
 }
 .tv-extension.tv-accent-good { border-left-color: #08734d; }
@@ -114,10 +115,10 @@
 .tv-extension.tv-accent-warn { border-left-color: #815000; }
 .tv-extension.tv-accent-orange { border-left-color: #9a3d10; }
 .tv-extension-top { display: -webkit-flex; display: flex; -webkit-align-items: baseline; align-items: baseline; -webkit-justify-content: space-between; justify-content: space-between; }
-.tv-extension-number { display: block; font-size: 25px; font-weight: bold; }
-.tv-extension strong.tv-extension-name { display: block; color: #152639; overflow-wrap: break-word; word-wrap: break-word; }
-.tv-extension-state { display: inline-block; margin-left: 7px; text-align: right; font-weight: bold; }
-.tv-extension-queue { display: block; margin-top: 3px; color: #43546a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .82em; }
+.tv-extension-number { display: block; font-size: 18px; font-weight: bold; }
+.tv-extension strong.tv-extension-name { display: block; color: #152639; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tv-extension-state { display: inline-block; margin-left: 4px; text-align: right; font-size: .86em; font-weight: bold; }
+.tv-extension-queue { display: block; color: #43546a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .82em; }
 .tv-queue { margin-bottom: 10px; }
 .tv-queue h3, .tv-history-result h3 { margin: 0; }
 .tv-pager { margin: 8px 0 0; }
@@ -152,8 +153,8 @@
   .tv-kpi { font-size: 19px; }
   .tv-kpi strong { font-size: 48px; }
   .tv-panel h2 { font-size: 24px; }
-  .tv-extension { font-size: 19px; }
-  .tv-extension-number { font-size: 32px; }
+  .tv-extension { width: 11.5%; font-size: 14px; }
+  .tv-extension-number { font-size: 21px; }
 }
 
 @media (max-width: 1050px) {
@@ -166,10 +167,29 @@
   .tv-filter-form select { max-width: 32vw; }
 }
 
+@media (max-width: 900px) {
+  .tv-extension { width: 24%; }
+}
+
 @media (max-height: 650px) {
   .tv-main { padding-top: 8px; padding-bottom: 8px; }
   .tv-sections a { padding-top: 4px; padding-bottom: 4px; }
   .tv-extension-queue { display: none; }
+}
+
+@media (max-height: 760px) and (min-width: 901px) {
+  .tv-header { padding: 5px 16px; }
+  .tv-brand img { width: 52px; }
+  .tv h1 { font-size: 21px; }
+  .tv-nav a { padding: 3px 8px; font-size: 13px; }
+  .tv-meta { margin-bottom: 6px; font-size: 13px; }
+  .tv-roster { padding: 8px 10px; }
+  .tv-roster h2 { font-size: 17px; }
+  .tv-filter-form { font-size: 13px; }
+  .tv-filter-form input, .tv-filter-form select, .tv-filter-form button { padding: 4px 6px; }
+  .tv-extension { width: 13.28%; margin-bottom: 4px; padding: 3px 5px; font-size: 12px; }
+  .tv-extension-number { font-size: 17px; }
+  .tv-extension-state { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
 
 @media (max-width: 660px) {

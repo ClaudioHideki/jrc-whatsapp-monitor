@@ -430,6 +430,26 @@ class RouteTests(unittest.TestCase):
         self.assertIn(b"Ramal 102", queues.data)
         self.assertIn(b"Bruno Teste", queues.data)
 
+    def test_tv_renders_all_40_extensions_even_with_an_old_page_parameter(self):
+        self.sign_in()
+        self.provider.directory = EXTENSIONS + [
+            {"name": f"demo-{ext}", "accountcode": "demo", "alias": str(ext),
+             "alias_name": f"{ext} - Ramal Teste {ext}"}
+            for ext in range(201, 239)
+        ]
+        monitor = PABXMonitor(PABXClient(CONFIG, self.provider))
+        monitor._collect()
+        with patch.object(self.service, "current", return_value=(PROFILE, 1, monitor)):
+            result = self.client.get("/tv/pabx?pagina=4")
+            filtered = self.client.get("/tv/pabx?busca=Ramal+Teste+238")
+
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.data.count(b'class="tv-extension '), 40)
+        self.assertNotIn(b'class="tv-pager"', result.data)
+        self.assertIn(b"Ramal Teste 238", result.data)
+        self.assertEqual(filtered.data.count(b'class="tv-extension '), 1)
+        self.assertIn(b"Ramal Teste 238", filtered.data)
+
     def test_tv_history_is_opt_in_and_reuses_cdr_permissions_and_downloads(self):
         self.sign_in()
         self.provider.cdr = [{**CDR[0], "arquivo_audio": f"{PROFILE.url}/recordings/private.wav"}]

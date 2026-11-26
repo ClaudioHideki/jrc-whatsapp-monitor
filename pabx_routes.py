@@ -491,7 +491,7 @@ def register_pabx(app, login_required, login_user, login_password):
         return render_template(
             "tv.html", mode="pabx", refresh=15, indicators=data.get("indicators", {}),
             snapshot=snapshot, queues=queues, view=view, states=TV_EXTENSION_STATES, filters=filters,
-            extensions=extensions, page=paginate(extensions, request.args.get("pagina", 1, type=int), 12),
+            extensions=extensions,
             cdr_enabled=bool(monitor and monitor.client.config.cdr_customer),
             connection=states.get(snapshot["state"]) or ADMIN_MESSAGES.get(snapshot["state"], "Falha ao consultar o PABX."),
             updated=datetime.fromisoformat(snapshot["last_success"]) if snapshot["last_success"] else None,
