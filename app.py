@@ -1,13 +1,19 @@
+import json
 import os
 import secrets
+import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
+from hashlib import sha256
+from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from itsdangerous import BadData, URLSafeSerializer
 
 from pabx_routes import register_pabx
 from tv_views import paginate
@@ -18,6 +24,7 @@ app = Flask(__name__)
 configured_secret = os.getenv("SECRET_KEY", "")
 valid_secret = configured_secret.strip() not in ("", "change-me", "trocar_secret_key_bem_grande")
 app.secret_key = configured_secret if valid_secret else secrets.token_hex(32)
+monitor_tokens = URLSafeSerializer(app.secret_key, salt="whatsapp-monitoring")
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
@@ -63,12 +70,22 @@ def map_status(value):
 def sanitize_instance(instance, source):
     chatwoot = instance.get("Chatwoot") or {}
     status_key, status_label = map_status(instance.get("connectionStatus"))
+    instance_name = instance.get("name") or ""
+    provider_id = instance.get("id")
+    identity_kind, identity_value = "name", instance_name
+    if type(provider_id) in (str, int) and str(provider_id).strip():
+        identity_kind, identity_value = "id", str(provider_id)
+    monitor_key = None
+    if identity_value:
+        identity = [source["id"], source["url"], identity_kind, identity_value]
+        monitor_key = sha256(json.dumps(identity).encode()).hexdigest()
     return {
+        "monitor_key": monitor_key,
         "source": source["name"],
         "source_host": safe_host(source["url"]),
         "client": chatwoot.get("organization") or "",
         "inbox": chatwoot.get("nameInbox") or "",
-        "instance": instance.get("name") or "",
+        "instance": instance_name,
         "number": instance.get("number") or "",
         "profile": instance.get("profileName") or "",
         "status": status_key,
@@ -85,7 +102,6 @@ def fetch_source(source):
         "host": safe_host(source["url"]),
         "online": False,
         "http_status": None,
-        "count": 0,
         "error": None,
         "duration_ms": None,
         "instances": [],
@@ -106,7 +122,6 @@ def fetch_source(source):
             raise ValueError("Resposta inesperada: esperado uma lista de instâncias.")
 
         result["instances"] = [sanitize_instance(item, source) for item in data]
-        result["count"] = len(result["instances"])
         result["online"] = True
 
     except requests.RequestException as exc:
@@ -118,6 +133,22 @@ def fetch_source(source):
 
     return result
 
+@contextmanager
+def monitoring_db():
+    path = Path(os.getenv("PABX_CONFIG_DB") or ".pabx/config.sqlite3")
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS whatsapp_paused "
+                "(monitor_key TEXT PRIMARY KEY, instance TEXT NOT NULL, inbox TEXT NOT NULL, source TEXT NOT NULL)"
+            )
+            yield db
+    except (OSError, sqlite3.Error):
+        app.logger.error("Falha ao acessar o banco do monitoramento WhatsApp.")
+        abort(503, description="Não foi possível acessar as pausas do monitoramento.")
+
+
 def get_monitor_data():
     sources = load_sources()
     results = []
@@ -128,6 +159,15 @@ def get_monitor_data():
             for future in as_completed(futures):
                 results.append(future.result())
 
+    with monitoring_db() as db:
+        db.row_factory = sqlite3.Row
+        paused = {
+            row["monitor_key"]: dict(row)
+            for row in db.execute(
+                "SELECT monitor_key, instance, inbox, source FROM whatsapp_paused ORDER BY source, inbox, instance"
+            )
+        }
+
     results.sort(key=lambda x: x["name"].lower())
     all_instances = []
     unavailable = 0
@@ -135,7 +175,9 @@ def get_monitor_data():
     for result in results:
         if not result["online"]:
             unavailable += 1
-        all_instances.extend(result["instances"])
+        active = [row for row in result["instances"] if row["monitor_key"] not in paused]
+        result["count"] = len(active)
+        all_instances.extend(active)
 
     summary = {
         "total": len(all_instances),
@@ -162,6 +204,7 @@ def get_monitor_data():
             } for r in results
         ],
         "instances": all_instances,
+        "paused_instances": list(paused.values()),
     }
 
 def login_required():
@@ -200,7 +243,8 @@ def logout():
 def dashboard():
     if not login_required():
         return redirect(url_for("login"))
-    return render_template("dashboard.html", username=session.get("username", ""))
+    csrf = session.setdefault("monitoring_csrf", secrets.token_hex(32))
+    return render_template("dashboard.html", monitoring_csrf=csrf), 200, {"Cache-Control": "no-store"}
 
 @app.get("/tv")
 def whatsapp_tv():
@@ -237,7 +281,42 @@ def whatsapp_tv():
 def api_status():
     if not login_required():
         return jsonify({"error": "unauthorized"}), 401
-    return jsonify(get_monitor_data())
+    snapshot = get_monitor_data()
+    for row in snapshot["instances"] + snapshot["paused_instances"]:
+        key = row.pop("monitor_key")
+        if key:
+            labels = [str(row[field])[:250] for field in ("instance", "inbox", "source")]
+            row["monitoring_token"] = monitor_tokens.dumps([key, *labels])
+    return jsonify(snapshot), 200, {"Cache-Control": "no-store"}
+
+
+@app.post("/api/monitoring")
+def update_monitoring():
+    if not login_required():
+        return jsonify(error="Sua sessão expirou."), 401
+
+    csrf = session.get("monitoring_csrf")
+    if not csrf or not secrets.compare_digest(csrf.encode(), request.headers.get("X-CSRF-Token", "").encode()):
+        return jsonify(error="Recarregue a página para atualizar o monitoramento."), 403
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or type(data.get("paused")) is not bool or not isinstance(data.get("token"), str):
+        return jsonify(error="Solicitação de monitoramento inválida."), 400
+    try:
+        key, instance, inbox, source = monitor_tokens.loads(data["token"])
+    except BadData:
+        return jsonify(error="Instância inválida. Atualize o painel e tente novamente."), 400
+
+    with monitoring_db() as db:
+        if data["paused"]:
+            db.execute(
+                "INSERT INTO whatsapp_paused (monitor_key, instance, inbox, source) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(monitor_key) DO NOTHING",
+                (key, instance, inbox, source),
+            )
+        else:
+            db.execute("DELETE FROM whatsapp_paused WHERE monitor_key = ?", (key,))
+    return "", 204
 
 if __name__ == "__main__":
     http_enabled = os.getenv("PABX_LOCAL_HTTP_ORIGIN") or os.getenv("PABX_DOKPLOY_HTTP_ORIGIN")

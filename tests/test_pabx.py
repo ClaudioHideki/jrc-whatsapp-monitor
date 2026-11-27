@@ -869,10 +869,13 @@ class WhatsAppTests(unittest.TestCase):
         import app as module
 
         client = module.app.test_client()
-        with patch.multiple(module, LOGIN_CONFIGURED=True, LOGIN_USER="demo", LOGIN_PASSWORD="fixture-pass"), patch.dict("os.environ", {
+        with tempfile.TemporaryDirectory() as folder, patch.multiple(
+            module, LOGIN_CONFIGURED=True, LOGIN_USER="demo", LOGIN_PASSWORD="fixture-pass",
+        ), patch.dict("os.environ", {
             "EVOLUTION_01_NAME": "WhatsApp teste",
             "EVOLUTION_01_URL": "https://whatsapp.example.invalid",
             "EVOLUTION_01_KEY": "fixture",
+            "PABX_CONFIG_DB": str(Path(folder) / "config.sqlite3"),
         }, clear=True), patch("app.requests.get", return_value=response(200, [{"connectionStatus": "open"}])) as api:
             self.assertEqual(client.get("/api/status").status_code, 401)
             self.assertEqual(client.post("/login", data={"username": "demo", "password": "fixture-pass"}).status_code, 302)
@@ -880,6 +883,68 @@ class WhatsAppTests(unittest.TestCase):
             status = client.get("/api/status")
         self.assertEqual(status.json["summary"]["connected"], 1)
         self.assertEqual(api.call_args.args[0], "https://whatsapp.example.invalid/instance/fetchInstances")
+
+    def test_pause_is_shared_and_scoped_to_one_source_and_can_be_reversed_offline(self):
+        import app as module
+
+        first = {"id": "id-1", "name": "Atendimento Norte", "connectionStatus": "close"}
+        other = {"name": "Atendimento Sul", "connectionStatus": "open"}
+        first_online = True
+
+        def fetch(url, **kwargs):
+            if "first.example.invalid" in url:
+                return response(200, [first, other]) if first_online else response(503, {})
+            return response(200, [first])
+
+        with tempfile.TemporaryDirectory() as folder, patch.multiple(
+            module, LOGIN_CONFIGURED=True, LOGIN_USER="demo", LOGIN_PASSWORD="fixture-pass",
+        ), patch.dict("os.environ", {
+            "EVOLUTION_01_NAME": "Fonte Norte",
+            "EVOLUTION_01_URL": "https://first.example.invalid",
+            "EVOLUTION_01_KEY": "fixture",
+            "EVOLUTION_02_NAME": "Fonte Sul",
+            "EVOLUTION_02_URL": "https://second.example.invalid",
+            "EVOLUTION_02_KEY": "fixture",
+            "PABX_CONFIG_DB": str(Path(folder) / "config.sqlite3"),
+        }, clear=True), patch("app.requests.get", side_effect=fetch) as api:
+            client = module.app.test_client()
+            second_client = module.app.test_client()
+            login = {"username": "demo", "password": "fixture-pass"}
+            self.assertEqual(client.post("/api/monitoring", json={}).status_code, 401)
+            client.post("/login", data=login)
+            client.get("/dashboard")
+            with client.session_transaction() as state:
+                headers = {"X-CSRF-Token": state["monitoring_csrf"]}
+            snapshot = client.get("/api/status").json
+            self.assertEqual(snapshot["summary"]["total"], 3)
+            target = next(row for row in snapshot["instances"] if row["source"] == "Fonte Norte" and row["instance"] == first["name"])
+            pause = {"token": target["monitoring_token"], "paused": True}
+            self.assertEqual(client.post("/api/monitoring", json=pause).status_code, 403)
+            self.assertEqual(client.post("/api/monitoring", json={**pause, "token": "invalid"}, headers=headers).status_code, 400)
+            api.reset_mock()
+            for _ in range(2):
+                self.assertEqual(client.post("/api/monitoring", json=pause, headers=headers).status_code, 204)
+            api.assert_not_called()
+
+            second_client.post("/login", data=login)
+            first["name"] = "Atendimento Renomeado"
+            snapshot = second_client.get("/api/status").json
+            self.assertEqual(snapshot["summary"]["total"], 2)
+            self.assertEqual(snapshot["summary"]["disconnected"], 1)
+            self.assertEqual([row["count"] for row in snapshot["sources"]], [1, 1])
+            self.assertEqual([row["source"] for row in snapshot["instances"] if row["instance"] == first["name"]], ["Fonte Sul"])
+            self.assertNotIn(first["name"].encode(), second_client.get("/tv?visao=instancias&api=Fonte+Norte").data)
+            self.assertEqual(len(snapshot["paused_instances"]), 1)
+
+            first_online = False
+            paused = client.get("/api/status").json["paused_instances"]
+            self.assertEqual(len(paused), 1)
+            resume = {"token": paused[0]["monitoring_token"], "paused": False}
+            self.assertEqual(client.post("/api/monitoring", json=resume, headers=headers).status_code, 204)
+            first_online = True
+            snapshot = second_client.get("/api/status").json
+            self.assertEqual(snapshot["summary"]["total"], 3)
+            self.assertEqual(snapshot["paused_instances"], [])
 
 
 if __name__ == "__main__":

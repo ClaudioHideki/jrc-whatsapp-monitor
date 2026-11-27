@@ -386,6 +386,53 @@ select,
 
 .status { font-weight: 900; }
 
+.monitoring-btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: var(--thead);
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.client-table .monitoring-btn { margin-top: 6px; }
+.monitoring-btn:hover { border-color: var(--muted); }
+.monitoring-btn:disabled { opacity: .6; cursor: wait; }
+
+.paused-monitoring {
+  margin: 0 0 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.paused-monitoring summary { padding: 12px 14px; cursor: pointer; font-weight: 700; }
+.paused-monitoring ul { list-style: none; margin: 0; padding: 0; }
+.paused-monitoring li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.monitoring-feedback:not(:empty) {
+  position: fixed;
+  z-index: 11;
+  right: 16px;
+  bottom: 16px;
+  max-width: calc(100% - 32px);
+  padding: 12px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, .2);
+}
+
 .no-group-results,
 .empty-card {
   padding: 22px;

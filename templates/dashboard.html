@@ -6,7 +6,7 @@
   <title>JRC Monitoramento WhatsApp</title>
   <noscript><meta http-equiv="refresh" content="0;url={{ url_for('whatsapp_tv') }}"></noscript>
   <script id="tv-fallback" src="{{ url_for('static', filename='tv-fallback.js') }}" data-monitor="whatsapp" data-tv-url="{{ url_for('whatsapp_tv') }}"></script>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='monitoring') }}">
 </head>
 <body>
 <header class="topbar">
@@ -30,7 +30,7 @@
   </div>
 </header>
 
-<main class="container">
+<main class="container" data-monitoring-url="{{ url_for('update_monitoring') }}" data-monitoring-csrf="{{ monitoring_csrf }}">
   {% include "_monitor_nav.html" %}
   <section id="summary" class="summary-grid"></section>
 
@@ -54,7 +54,13 @@
 
   <section id="status-tabs" class="status-tabs"></section>
 
+  <details id="paused-monitoring" class="paused-monitoring" hidden>
+    <summary>Monitoramento pausado (<span id="paused-count">0</span>)</summary>
+    <ul id="paused-instances"></ul>
+  </details>
+
   <section id="grouped-instances" class="grouped-instances"></section>
+  <div id="monitoring-feedback" class="monitoring-feedback" role="status"></div>
 
   <details class="legend-bottom">
     <summary>
@@ -82,6 +88,6 @@
 </main>
 
 <script src="{{ url_for('static', filename='theme.js') }}"></script>
-<script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+<script src="{{ url_for('static', filename='dashboard.js', v='monitoring') }}"></script>
 </body>
 </html>

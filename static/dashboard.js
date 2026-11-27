@@ -1,6 +1,9 @@
 let monitorData = null;
 let seconds = 60;
 let timer = null;
+let refreshRequest = null;
+let monitoringBusy = false;
+let monitoringFeedbackTimer = null;
 
 let activeStatus = "";
 let specialView = "";
@@ -635,6 +638,33 @@ function groupKey(
 }
 
 
+function monitoringButton(item, paused) {
+  if (!item.monitoring_token) return "";
+  const label = paused ? "Reativar" : "Pausar monitoramento";
+  const action = paused ? "Reativar monitoramento" : label;
+  const name = item.inbox || item.instance || item.source;
+  return `<button class="monitoring-btn" type="button" aria-label="${action} de ${escapeHtml(name)}"
+    data-monitoring-token="${escapeHtml(item.monitoring_token)}" data-paused="${paused}"
+    ${monitoringBusy ? "disabled" : ""}>${label}</button>`;
+}
+
+
+function renderPausedMonitoring(items) {
+  const section = document.getElementById("paused-monitoring");
+  section.hidden = !items.length;
+  document.getElementById("paused-count").textContent = items.length;
+  document.getElementById("paused-instances").innerHTML = items.map(item => `
+    <li>
+      <div>
+        <div class="primary-cell">${escapeHtml(item.inbox || item.instance || "Instância")}</div>
+        <div class="secondary-cell">${escapeHtml([item.inbox && item.instance, item.source].filter(Boolean).join(" · "))}</div>
+      </div>
+      ${monitoringButton(item, true)}
+    </li>
+  `).join("");
+}
+
+
 /* =========================================================
    LINHAS DAS INSTÂNCIAS
 ========================================================= */
@@ -720,6 +750,8 @@ function renderRows(
                     item.instance || "-"
                   )}
                 </div>
+
+                ${monitoringButton(item, false)}
 
               </td>
 
@@ -822,6 +854,9 @@ function renderGroupedInstances() {
       "grouped-instances"
     );
 
+  const openGroups = new Set(
+    Array.from(container.querySelectorAll(".client-card[open]"), card => card.dataset.groupKey)
+  );
 
   const filtered =
     monitorData.instances.filter(
@@ -958,6 +993,7 @@ function renderGroupedInstances() {
                     <details
                       class="client-card"
                       data-group-key="${escapeHtml(key)}"
+                      ${openGroups.has(key) ? "open" : ""}
                     >
 
                       <summary>
@@ -1269,6 +1305,7 @@ function renderAll() {
 
 
   renderGroupedInstances();
+  renderPausedMonitoring(monitorData.paused_instances || []);
 
 }
 
@@ -1277,7 +1314,15 @@ function renderAll() {
    CONSULTA DAS APIs
 ========================================================= */
 
-async function refreshData() {
+function refreshData() {
+  if (!refreshRequest) {
+    refreshRequest = loadMonitorData().finally(() => { refreshRequest = null; });
+  }
+  return refreshRequest;
+}
+
+
+async function loadMonitorData() {
 
   const btn =
     document.getElementById(
@@ -1317,7 +1362,7 @@ async function refreshData() {
       window.location.href =
         "/login";
 
-      return;
+      return false;
 
     }
 
@@ -1355,6 +1400,7 @@ async function refreshData() {
 
 
     resetCountdown();
+    return true;
 
   }
 
@@ -1371,6 +1417,7 @@ async function refreshData() {
     console.error(
       "Falha ao atualizar dashboard."
     );
+    return false;
 
   }
 
@@ -1386,6 +1433,61 @@ async function refreshData() {
   }
 
 }
+
+
+function showMonitoringFeedback(message) {
+  const feedback = document.getElementById("monitoring-feedback");
+  feedback.textContent = message;
+  clearTimeout(monitoringFeedbackTimer);
+  monitoringFeedbackTimer = setTimeout(() => { feedback.textContent = ""; }, 6500);
+}
+
+
+const monitoringPanel = document.querySelector("[data-monitoring-url]");
+monitoringPanel.addEventListener("click", async event => {
+  const button = event.target.closest("[data-monitoring-token]");
+  if (!button || monitoringBusy) return;
+
+  const paused = button.dataset.paused !== "true";
+  const clickedGroup = button.closest(".client-card")?.dataset.groupKey;
+  const hadFocus = document.activeElement === button;
+  monitoringBusy = true;
+  button.disabled = true;
+  try {
+    const response = await fetch(monitoringPanel.dataset.monitoringUrl, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": monitoringPanel.dataset.monitoringCsrf },
+      body: JSON.stringify({ token: button.dataset.monitoringToken, paused })
+    });
+    if (response.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    if (!response.ok) {
+      const failure = await response.json().catch(() => ({}));
+      showMonitoringFeedback(failure.error || "Não foi possível alterar o monitoramento. Tente novamente.");
+      return;
+    }
+
+    // Uma consulta iniciada antes da alteração pode ter lido as pausas antigas.
+    await refreshRequest;
+    const refreshed = await refreshData();
+    const result = paused ? "Monitoramento pausado." : "Monitoramento reativado.";
+    showMonitoringFeedback(refreshed ? result : `${result} Atualize o painel para conferir.`);
+  } catch {
+    showMonitoringFeedback("Não foi possível confirmar a alteração. Atualize o painel e tente novamente.");
+  } finally {
+    monitoringBusy = false;
+    monitoringPanel.querySelectorAll("[data-monitoring-token]:disabled").forEach(control => { control.disabled = false; });
+    if (hadFocus && document.activeElement === document.body) {
+      const group = Array.from(document.querySelectorAll(".client-card")).find(card => card.dataset.groupKey === clickedGroup);
+      const next = button.isConnected ? button : group?.querySelector("summary")
+        || document.querySelector("#paused-monitoring:not([hidden]) summary") || document.getElementById("search");
+      next.focus({ preventScroll: true });
+    }
+  }
+});
 
 
 /* =========================================================

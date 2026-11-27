@@ -73,6 +73,19 @@ As chaves ficam apenas no backend e não são enviadas ao navegador.
 - Atualização automática de 60 segundos preservada.
 - Consultas Evolution continuam somente GET.
 
+## Pausar o monitoramento de um WhatsApp
+
+Expanda o cliente e clique em **Pausar monitoramento** na instância desejada.
+A pausa vale para todo o painel e retira a instância dos totais e do modo TV.
+Use **Monitoramento pausado → Reativar** para voltar a acompanhá-la. O monitor
+continua consultando a lista da API Evolution e a conexão de WhatsApp segue ativa
+ou desconectada conforme o estado na origem.
+
+As pausas são gravadas no SQLite de `PABX_CONFIG_DB`, ou em
+`.pabx/config.sqlite3` por padrão. No Docker Compose, mantenha o diretório
+desse arquivo em um volume persistente para conservar as escolhas quando
+trocar a imagem. Se o volume do PABX já está montado, as pausas usam o mesmo banco.
+
 ## Monitoramento PABX
 
 A aba **Monitoramento PABX** usa o mesmo login do painel WhatsApp. A conta
